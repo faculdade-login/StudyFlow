@@ -6,7 +6,6 @@ import { supabase } from './supabase-client.js';
 import {
   fetchUserData,
   fetchRankingUsers,
-  syncProfileStats,
   updateProfileName,
   insertCourse,
   updateCourseRow,
@@ -15,6 +14,7 @@ import {
   updateModuleRow,
   deleteModuleRow,
   insertLesson,
+  insertLessonsBatch,
   updateLessonRow,
   deleteLessonRow,
   insertActivity,
@@ -22,6 +22,18 @@ import {
   deleteActivityRow,
   recalculateAndGetStats
 } from './supabase-data.js';
+
+import {
+  scheduleProfileStatsSync,
+  flushProfileStatsSync,
+  isRankingStale,
+  markRankingFetched,
+  runRankingRefresh,
+  resetSyncState,
+  registerSyncLifecycle
+} from './supabase-sync.js';
+
+export { flushProfileStatsSync as flushPendingSync, registerSyncLifecycle };
 
 let cachedData = defaultData();
 
@@ -61,16 +73,40 @@ export async function hydrateData(userId, email = '') {
   return cachedData;
 }
 
-export async function refreshRanking() {
-  try {
-    cachedData.users = await fetchRankingUsers();
-    const user = getCurrentUser(cachedData);
-    if (user && !cachedData.users.some(u => u.id === user.id)) {
-      cachedData.users.push(user);
-    }
-  } catch {
-    // ranking opcional se a view ainda nao existir
+export async function refreshRanking(options = {}) {
+  const { force = false } = options;
+
+  syncCurrentUserInRanking(cachedData);
+
+  if (!force && !isRankingStale()) {
+    return;
   }
+
+  return runRankingRefresh(async () => {
+    try {
+      cachedData.users = await fetchRankingUsers();
+      markRankingFetched();
+      syncCurrentUserInRanking(cachedData);
+
+      const user = getCurrentUser(cachedData);
+      if (user && !cachedData.users.some(u => u.id === user.id)) {
+        cachedData.users.push(user);
+      }
+    } catch {
+      // ranking opcional se a view ainda nao existir
+    }
+  });
+}
+
+function syncCurrentUserInRanking(data) {
+  if (!data.currentUserId) return;
+
+  const stats = recalculateAndGetStats(data, data.currentUserId);
+  const userIndex = data.users.findIndex(u => u.id === data.currentUserId);
+  if (userIndex === -1) return;
+
+  data.users[userIndex].lessonsCompleted = stats.lessonsCompleted;
+  data.users[userIndex].hoursStudied = stats.hoursStudied;
 }
 
 export function generateId() {
@@ -179,6 +215,8 @@ export async function registerUser({ name, email, password }) {
 }
 
 export async function logoutUser() {
+  await flushProfileStatsSync();
+  resetSyncState();
   await supabase.auth.signOut();
   cachedData = defaultData();
 }
@@ -273,20 +311,25 @@ export function getActivityById(data, activityId) {
   return data.activities.find(a => a.id === activityId);
 }
 
-async function pushUserStats(data, userId) {
+function pushUserStats(data, userId, options = {}) {
   const stats = recalculateAndGetStats(data, userId);
   const userIndex = data.users.findIndex(u => u.id === userId);
   if (userIndex !== -1) {
     data.users[userIndex].lessonsCompleted = stats.lessonsCompleted;
     data.users[userIndex].hoursStudied = stats.hoursStudied;
   }
-  await syncProfileStats(userId, stats.lessonsCompleted, stats.hoursStudied);
+
+  scheduleProfileStatsSync(userId, stats.lessonsCompleted, stats.hoursStudied);
+
+  if (options.immediate) {
+    return flushProfileStatsSync();
+  }
 }
 
 export async function addCourse(data, course) {
   const created = await insertCourse(data.currentUserId, course);
   data.courses.push(created);
-  await pushUserStats(data, data.currentUserId);
+  pushUserStats(data, data.currentUserId);
   return created;
 }
 
@@ -295,7 +338,7 @@ export async function updateCourse(data, courseId, updates) {
   if (index === -1) return null;
   await updateCourseRow(courseId, updates);
   data.courses[index] = { ...data.courses[index], ...updates };
-  await pushUserStats(data, data.currentUserId);
+  pushUserStats(data, data.currentUserId);
   return data.courses[index];
 }
 
@@ -306,7 +349,7 @@ export async function deleteCourse(data, courseId) {
   data.modules = data.modules.filter(m => m.courseId !== courseId);
   data.activities = data.activities.filter(a => a.courseId !== courseId);
   data.courses = data.courses.filter(c => c.id !== courseId);
-  await pushUserStats(data, data.currentUserId);
+  pushUserStats(data, data.currentUserId);
 }
 
 export async function addModule(data, module) {
@@ -327,13 +370,27 @@ export async function deleteModule(data, moduleId) {
   await deleteModuleRow(moduleId);
   data.lessons = data.lessons.filter(l => l.moduleId !== moduleId);
   data.modules = data.modules.filter(m => m.id !== moduleId);
-  await pushUserStats(data, data.currentUserId);
+  pushUserStats(data, data.currentUserId);
 }
 
 export async function addLesson(data, lesson) {
   const created = await insertLesson(lesson.moduleId, lesson);
   data.lessons.push(created);
-  await pushUserStats(data, data.currentUserId);
+  pushUserStats(data, data.currentUserId);
+  return created;
+}
+
+export async function addLessonsBatch(data, moduleId, lessons) {
+  const startOrder = getLessonsByModule(data, moduleId).length;
+  const payload = lessons.map((lesson, index) => ({
+    ...lesson,
+    moduleId,
+    order: startOrder + index
+  }));
+
+  const created = await insertLessonsBatch(moduleId, payload);
+  data.lessons.push(...created);
+  pushUserStats(data, data.currentUserId);
   return created;
 }
 
@@ -342,14 +399,14 @@ export async function updateLesson(data, lessonId, updates) {
   if (index === -1) return null;
   await updateLessonRow(lessonId, updates);
   data.lessons[index] = { ...data.lessons[index], ...updates };
-  await pushUserStats(data, data.currentUserId);
+  pushUserStats(data, data.currentUserId);
   return data.lessons[index];
 }
 
 export async function deleteLesson(data, lessonId) {
   await deleteLessonRow(lessonId);
   data.lessons = data.lessons.filter(l => l.id !== lessonId);
-  await pushUserStats(data, data.currentUserId);
+  pushUserStats(data, data.currentUserId);
 }
 
 export async function addActivity(data, activity) {

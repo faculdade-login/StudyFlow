@@ -18,6 +18,7 @@ import {
   updateModule,
   deleteModule,
   addLesson,
+  addLessonsBatch,
   updateLesson,
   deleteLesson,
   addActivity,
@@ -37,6 +38,7 @@ import {
   getRanking,
   recalculateUserLessons,
   recalculateAllUsersStats,
+  registerSyncLifecycle,
 } from './storage.js';
 
 import {
@@ -47,9 +49,11 @@ import {
   calcCourseProgress,
   calcHoursStudied,
   isCourseComplete,
+  generateLessonBatchNames,
   escapeHtml,
   getInitials,
   formatHours,
+  formatOrdinal,
   calcCourseEstimatedHours,
   renderProgressBar
 } from './utils.js';
@@ -63,14 +67,12 @@ import {
   getExpensesByUser,
   getGoalsByUser,
   salaryForm,
-  savingsForm,
   monthlyBillForm,
   debtForm,
   incomeForm,
   expenseForm,
   goalForm,
   handleSaveSalary,
-  handleSaveSavings,
   handleSaveMonthlyBill,
   handleSaveDebt,
   handleSaveIncome,
@@ -92,6 +94,8 @@ let currentView = 'dashboard';
 let selectedCourseId = null;
 let selectedTab = 'modules';
 let selectedFinanceTab = 'overview';
+let financeTabsScrollLeft = 0;
+let confirmResolver = null;
 
 const content = document.getElementById('content');
 const pageTitle = document.getElementById('page-title');
@@ -109,6 +113,10 @@ const authLoginPanel = document.getElementById('auth-login');
 const authRegisterPanel = document.getElementById('auth-register');
 const topbarProfile = document.getElementById('topbar-profile');
 
+function scrollToTop() {
+  window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+}
+
 async function refresh() {
   data = loadData();
   recalculateUserLessons(data, data.currentUserId);
@@ -124,6 +132,48 @@ async function runAction(action) {
   } catch (err) {
     console.error(err);
     showToast(err.message || 'Erro ao salvar dados.', 'error');
+  }
+}
+
+let loadingToast = null;
+
+function showLoadingToast(message = 'Aguarde, salvando...') {
+  hideLoadingToast();
+  const container = document.getElementById('toast-container');
+  loadingToast = document.createElement('div');
+  loadingToast.className = 'toast loading';
+  loadingToast.innerHTML = `<span class="toast-spinner" aria-hidden="true"></span>${escapeHtml(message)}`;
+  container.appendChild(loadingToast);
+}
+
+function hideLoadingToast() {
+  if (loadingToast) {
+    loadingToast.remove();
+    loadingToast = null;
+  }
+}
+
+async function runSaveAction(action, trigger = null) {
+  const btn = trigger?.closest?.('button') || trigger;
+  const originalText = btn?.textContent?.trim();
+
+  showLoadingToast('Aguarde, salvando...');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Salvando...';
+  }
+
+  try {
+    await action();
+  } catch (err) {
+    console.error(err);
+    showToast(err.message || 'Erro ao salvar dados.', 'error');
+  } finally {
+    hideLoadingToast();
+    if (btn) {
+      btn.disabled = false;
+      if (originalText) btn.textContent = originalText;
+    }
   }
 }
 
@@ -205,15 +255,14 @@ function renderDashboard() {
   let totalLessons = 0;
 
   courses.forEach(course => {
+    const modules = getModulesByCourse(data, course.id);
     const lessons = getLessonsByCourse(data, course.id);
     totalLessons += lessons.length;
     totalLessonsCompleted += lessons.filter(l => l.completed).length;
 
-    if (lessons.length === 0) return;
-    if (isCourseComplete(lessons)) {
+    if (modules.length === 0 || lessons.length === 0) return;
+    if (isCourseComplete(lessons, modules)) {
       completed++;
-    } else if (lessons.some(l => l.completed)) {
-      inProgress++;
     } else {
       inProgress++;
     }
@@ -246,7 +295,7 @@ function renderDashboard() {
       </div>
       <div class="stat-card purple">
         <div class="stat-label">Sua Posicao no Ranking</div>
-        <div class="stat-value">${userPosition > 0 ? userPosition + 'o' : '-'}</div>
+        <div class="stat-value">${formatOrdinal(userPosition)}</div>
       </div>
     </div>
 
@@ -313,10 +362,11 @@ function renderCourses() {
 
 function renderCourseCards(courses) {
   return courses.map(course => {
+    const modules = getModulesByCourse(data, course.id);
     const lessons = getLessonsByCourse(data, course.id);
     const { percent } = calcCourseProgress(lessons);
     const deadline = getDeadlineInfo(course.deadline);
-    const complete = isCourseComplete(lessons) && lessons.length > 0;
+    const complete = isCourseComplete(lessons, modules);
 
     return `
       <div class="course-card" data-action="open-course" data-course-id="${course.id}">
@@ -510,10 +560,26 @@ function renderRanking() {
   `;
 }
 
+function bindFinanceTabsScroll() {
+  const tabs = content.querySelector('#finance-tabs');
+  if (!tabs) return;
+
+  tabs.scrollLeft = financeTabsScrollLeft;
+  tabs.addEventListener('scroll', () => {
+    financeTabsScrollLeft = tabs.scrollLeft;
+  }, { passive: true });
+}
+
 function renderFinance() {
+  const tabsEl = content.querySelector('#finance-tabs');
+  if (tabsEl) {
+    financeTabsScrollLeft = tabsEl.scrollLeft;
+  }
+
   pageTitle.textContent = 'Finanças';
   const user = getCurrentUser(data);
   content.innerHTML = renderFinancePage(data, user.id, selectedFinanceTab);
+  bindFinanceTabsScroll();
 }
 
 function openSalaryModal() {
@@ -522,15 +588,6 @@ function openSalaryModal() {
   showModal('Salário Fixo', salaryForm(settings), `
     <button class="btn btn-secondary" data-action="close-modal">Cancelar</button>
     <button class="btn btn-primary" data-action="save-salary">Salvar</button>
-  `);
-}
-
-function openSavingsModal() {
-  const user = getCurrentUser(data);
-  const settings = getFinanceSettings(data, user.id);
-  showModal('Poupança Atual', savingsForm(settings), `
-    <button class="btn btn-secondary" data-action="close-modal">Cancelar</button>
-    <button class="btn btn-primary" data-action="save-savings">Salvar</button>
   `);
 }
 
@@ -611,9 +668,10 @@ function renderRankingList(ranking, currentUserId, showAll = false) {
 
 function renderRankingCourseCards(courses) {
   return courses.map(course => {
+    const modules = getModulesByCourse(data, course.id);
     const lessons = getLessonsByCourse(data, course.id);
     const { percent, completed, total } = calcCourseProgress(lessons);
-    const complete = isCourseComplete(lessons) && lessons.length > 0;
+    const complete = isCourseComplete(lessons, modules);
     const estimatedHours = calcCourseEstimatedHours(course, lessons);
 
     return `
@@ -675,7 +733,9 @@ function showModal(title, bodyHtml, footerHtml, options = {}) {
   modalTitle.textContent = title;
   modalBody.innerHTML = bodyHtml;
   modalFooter.innerHTML = footerHtml;
-  document.getElementById('modal').classList.toggle('modal-profile', !!options.profile);
+  const modal = document.getElementById('modal');
+  modal.classList.toggle('modal-profile', !!options.profile);
+  modal.classList.toggle('modal-confirm', !!options.confirm);
   modalOverlay.hidden = false;
 }
 
@@ -683,7 +743,8 @@ function closeModal() {
   modalOverlay.hidden = true;
   modalBody.innerHTML = '';
   modalFooter.innerHTML = '';
-  document.getElementById('modal').classList.remove('modal-profile');
+  const modal = document.getElementById('modal');
+  modal.classList.remove('modal-profile', 'modal-confirm');
 }
 
 function showToast(message, type = 'success') {
@@ -693,6 +754,36 @@ function showToast(message, type = 'success') {
   toast.textContent = message;
   container.appendChild(toast);
   setTimeout(() => toast.remove(), 3000);
+}
+
+function showConfirm(message, options = {}) {
+  const {
+    title = 'Confirmar',
+    confirmLabel = 'Confirmar',
+    cancelLabel = 'Cancelar',
+    danger = true
+  } = options;
+
+  return new Promise(resolve => {
+    confirmResolver = resolve;
+    showModal(
+      title,
+      `<p class="confirm-message">${escapeHtml(message)}</p>`,
+      `
+        <button class="btn btn-secondary" data-action="confirm-cancel">${escapeHtml(cancelLabel)}</button>
+        <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" data-action="confirm-ok">${escapeHtml(confirmLabel)}</button>
+      `,
+      { confirm: true }
+    );
+  });
+}
+
+function resolveConfirm(confirmed) {
+  if (confirmResolver) {
+    confirmResolver(confirmed);
+    confirmResolver = null;
+  }
+  closeModal();
 }
 
 function courseForm(course = null) {
@@ -741,11 +832,76 @@ function lessonForm(lesson = null) {
   return `
     <form id="modal-form">
       <div class="form-group">
-        <label>Nome da Aula <span class="required">*</span></label>
-        <input type="text" class="form-input" name="name" required value="${lesson ? escapeHtml(lesson.name) : ''}" placeholder="Ex: Variaveis e Tipos de Dados">
+        <label>Modo de criacao</label>
+        <div class="form-radio-group">
+          <label class="form-radio">
+            <input type="radio" name="mode" value="single" checked>
+            Aula unica
+          </label>
+          <label class="form-radio">
+            <input type="radio" name="mode" value="batch">
+            Criar em lote
+          </label>
+        </div>
+      </div>
+      <div id="lesson-single-fields">
+        <div class="form-group">
+          <label>Nome da Aula <span class="required">*</span></label>
+          <input type="text" class="form-input" name="name" value="${lesson ? escapeHtml(lesson.name) : ''}" placeholder="Ex: Variaveis e Tipos de Dados">
+        </div>
+      </div>
+      <div id="lesson-batch-fields" hidden>
+        <div class="form-group">
+          <label>Quantidade de aulas <span class="required">*</span></label>
+          <input type="number" class="form-input" name="quantity" min="1" max="100" value="10" placeholder="Ex: 10">
+        </div>
+        <div class="form-group">
+          <label>Nome base</label>
+          <input type="text" class="form-input" name="baseName" value="Aula" placeholder="Aula">
+          <p class="form-input">Ex.: 10 gera "1 - Aula", "2 - Aula", "3 - Aula"...</p>
+        </div>
+        <div class="batch-preview" id="batch-preview" aria-live="polite"></div>
       </div>
     </form>
   `;
+}
+
+function setupLessonFormListeners() {
+  const form = document.getElementById('modal-form');
+  if (!form) return;
+
+  const singleFields = document.getElementById('lesson-single-fields');
+  const batchFields = document.getElementById('lesson-batch-fields');
+  const preview = document.getElementById('batch-preview');
+  const nameInput = form.querySelector('[name="name"]');
+
+  function updateBatchPreview() {
+    const quantity = Math.min(100, Math.max(1, parseInt(form.querySelector('[name="quantity"]').value, 10) || 0));
+    const baseName = form.querySelector('[name="baseName"]').value.trim() || 'Aula';
+    const names = generateLessonBatchNames(quantity, baseName);
+    const shown = names.slice(0, 3);
+    const suffix = names.length > 3 ? `<br>... e mais ${names.length - 3} aula${names.length - 3 > 1 ? 's' : ''}` : '';
+
+    preview.innerHTML = `
+      <span class="batch-preview-label">Pre-visualizacao:</span>
+      ${shown.map(n => escapeHtml(n)).join('<br>')}${suffix}
+    `;
+  }
+
+  function syncMode() {
+    const isBatch = form.querySelector('[name="mode"]:checked')?.value === 'batch';
+    singleFields.hidden = isBatch;
+    batchFields.hidden = !isBatch;
+    nameInput.required = !isBatch;
+    if (isBatch) updateBatchPreview();
+  }
+
+  form.querySelectorAll('[name="mode"]').forEach(radio => {
+    radio.addEventListener('change', syncMode);
+  });
+  form.querySelector('[name="quantity"]').addEventListener('input', updateBatchPreview);
+  form.querySelector('[name="baseName"]').addEventListener('input', updateBatchPreview);
+  syncMode();
 }
 
 function activityForm(activity = null) {
@@ -877,7 +1033,12 @@ async function handleSavePassword() {
 }
 
 async function handleLogout() {
-  if (!confirm('Deseja sair da sua conta?')) return;
+  const confirmed = await showConfirm('Deseja sair da sua conta?', {
+    title: 'Sair da conta',
+    confirmLabel: 'Sair',
+    danger: false
+  });
+  if (!confirmed) return;
   await logoutUser();
   closeModal();
   showAuthScreen(true);
@@ -923,6 +1084,7 @@ async function handleLogin(e) {
     showAuthScreen(false);
     setupEventListeners();
     await bootstrapApp();
+    scrollToTop();
   } catch (err) {
     authError.textContent = err.message || 'Erro ao entrar.';
     authError.hidden = false;
@@ -960,6 +1122,7 @@ async function handleRegister(e) {
     showAuthScreen(false);
     setupEventListeners();
     await bootstrapApp();
+    scrollToTop();
   } catch (err) {
     registerError.textContent = err.message || 'Erro ao cadastrar.';
     registerError.hidden = false;
@@ -1005,6 +1168,7 @@ function openNewLessonModal(moduleId) {
     <button class="btn btn-secondary" data-action="close-modal">Cancelar</button>
     <button class="btn btn-primary" data-action="save-lesson" data-module-id="${moduleId}">Salvar</button>
   `);
+  setupLessonFormListeners();
 }
 
 function openNewActivityModal(courseId) {
@@ -1070,6 +1234,34 @@ async function handleSaveModule(courseId, moduleId = null) {
 
 async function handleSaveLesson(moduleId) {
   const form = document.getElementById('modal-form');
+  const mode = form.querySelector('[name="mode"]:checked')?.value || 'single';
+
+  if (mode === 'batch') {
+    const quantity = parseInt(form.querySelector('[name="quantity"]').value, 10);
+    const baseName = form.querySelector('[name="baseName"]').value.trim() || 'Aula';
+
+    if (!quantity || quantity < 1 || quantity > 100) {
+      showToast('Informe uma quantidade entre 1 e 100.', 'error');
+      return;
+    }
+
+    let lessons = getLessonsByModule(data, moduleId);
+    const names = generateLessonBatchNames(quantity, baseName);
+    const startOrder = lessons.length;
+
+    await addLessonsBatch(data, moduleId, names.map((name, index) => ({
+      name,
+      order: startOrder + index,
+      completed: false,
+      completedAt: null
+    })));
+
+    closeModal();
+    showToast(`${quantity} aulas criadas`);
+    await refresh();
+    return;
+  }
+
   if (!form.reportValidity()) return;
 
   const name = form.querySelector('[name="name"]').value.trim();
@@ -1139,8 +1331,12 @@ async function handleContentClick(e) {
     case 'edit-course':
       openEditCourseModal(target.dataset.courseId);
       break;
-    case 'delete-course':
-      if (confirm('Tem certeza que deseja excluir este curso? Todos os modulos, aulas e atividades serao removidos.')) {
+    case 'delete-course': {
+      const confirmed = await showConfirm(
+        'Tem certeza que deseja excluir este curso? Todos os modulos, aulas e atividades serao removidos.',
+        { title: 'Excluir curso', confirmLabel: 'Excluir' }
+      );
+      if (confirmed) {
         await runAction(async () => {
           await deleteCourse(data, target.dataset.courseId);
           currentView = 'courses';
@@ -1150,6 +1346,7 @@ async function handleContentClick(e) {
         });
       }
       break;
+    }
     case 'switch-tab':
       selectedTab = target.dataset.tab;
       render();
@@ -1160,8 +1357,12 @@ async function handleContentClick(e) {
     case 'edit-module':
       openEditModuleModal(target.dataset.moduleId);
       break;
-    case 'delete-module':
-      if (confirm('Excluir este modulo e todas as suas aulas?')) {
+    case 'delete-module': {
+      const confirmed = await showConfirm(
+        'Excluir este modulo e todas as suas aulas?',
+        { title: 'Excluir modulo', confirmLabel: 'Excluir' }
+      );
+      if (confirmed) {
         await runAction(async () => {
           await deleteModule(data, target.dataset.moduleId);
           showToast('Modulo excluido');
@@ -1169,6 +1370,7 @@ async function handleContentClick(e) {
         });
       }
       break;
+    }
     case 'new-lesson':
       openNewLessonModal(target.dataset.moduleId);
       break;
@@ -1178,8 +1380,12 @@ async function handleContentClick(e) {
         await refresh();
       });
       break;
-    case 'delete-lesson':
-      if (confirm('Excluir esta aula?')) {
+    case 'delete-lesson': {
+      const confirmed = await showConfirm('Excluir esta aula?', {
+        title: 'Excluir aula',
+        confirmLabel: 'Excluir'
+      });
+      if (confirmed) {
         await runAction(async () => {
           await deleteLesson(data, target.dataset.lessonId);
           showToast('Aula excluida');
@@ -1187,6 +1393,7 @@ async function handleContentClick(e) {
         });
       }
       break;
+    }
     case 'new-activity':
       openNewActivityModal(target.dataset.courseId);
       break;
@@ -1199,8 +1406,12 @@ async function handleContentClick(e) {
         await refresh();
       });
       break;
-    case 'delete-activity':
-      if (confirm('Excluir esta atividade?')) {
+    case 'delete-activity': {
+      const confirmed = await showConfirm('Excluir esta atividade?', {
+        title: 'Excluir atividade',
+        confirmLabel: 'Excluir'
+      });
+      if (confirmed) {
         await runAction(async () => {
           await deleteActivity(data, target.dataset.activityId);
           showToast('Atividade excluida');
@@ -1208,9 +1419,11 @@ async function handleContentClick(e) {
         });
       }
       break;
+    }
     case 'go-ranking':
       currentView = 'ranking';
       setActiveNav('ranking');
+      await refreshRanking();
       render();
       break;
     case 'show-ranking-user':
@@ -1229,9 +1442,6 @@ async function handleContentClick(e) {
     case 'edit-salary':
       openSalaryModal();
       break;
-    case 'edit-savings':
-      openSavingsModal();
-      break;
     case 'new-monthly-bill':
       openMonthlyBillModal();
       break;
@@ -1239,13 +1449,13 @@ async function handleContentClick(e) {
       openMonthlyBillModal(target.dataset.billId);
       break;
     case 'save-monthly-bill':
-      await runAction(async () => {
+      await runSaveAction(async () => {
         if (await handleSaveMonthlyBill(data, getCurrentUser(data).id, target.dataset.billId || null)) {
           closeModal();
           showToast('Conta salva');
           render();
         }
-      });
+      }, target);
       break;
     case 'toggle-bill-paid':
       await runAction(async () => {
@@ -1253,8 +1463,12 @@ async function handleContentClick(e) {
         render();
       });
       break;
-    case 'delete-monthly-bill':
-      if (confirm('Excluir esta conta mensal?')) {
+    case 'delete-monthly-bill': {
+      const confirmed = await showConfirm('Excluir esta conta mensal?', {
+        title: 'Excluir conta',
+        confirmLabel: 'Excluir'
+      });
+      if (confirmed) {
         await runAction(async () => {
           await deleteMonthlyBill(data, target.dataset.billId);
           showToast('Conta excluida');
@@ -1262,6 +1476,7 @@ async function handleContentClick(e) {
         });
       }
       break;
+    }
     case 'new-debt':
       openDebtModal();
       break;
@@ -1269,13 +1484,13 @@ async function handleContentClick(e) {
       openDebtModal(target.dataset.debtId);
       break;
     case 'save-debt':
-      await runAction(async () => {
+      await runSaveAction(async () => {
         if (await handleSaveDebt(data, getCurrentUser(data).id, target.dataset.debtId || null)) {
           closeModal();
           showToast('Divida salva');
           render();
         }
-      });
+      }, target);
       break;
     case 'toggle-debt-paid':
       await runAction(async () => {
@@ -1283,8 +1498,12 @@ async function handleContentClick(e) {
         render();
       });
       break;
-    case 'delete-debt':
-      if (confirm('Excluir esta divida?')) {
+    case 'delete-debt': {
+      const confirmed = await showConfirm('Excluir esta divida?', {
+        title: 'Excluir divida',
+        confirmLabel: 'Excluir'
+      });
+      if (confirmed) {
         await runAction(async () => {
           await deleteDebt(data, target.dataset.debtId);
           showToast('Divida excluida');
@@ -1292,6 +1511,7 @@ async function handleContentClick(e) {
         });
       }
       break;
+    }
     case 'new-income':
       openIncomeModal();
       break;
@@ -1299,16 +1519,20 @@ async function handleContentClick(e) {
       openIncomeModal(target.dataset.incomeId);
       break;
     case 'save-income':
-      await runAction(async () => {
+      await runSaveAction(async () => {
         if (await handleSaveIncome(data, getCurrentUser(data).id, target.dataset.incomeId || null)) {
           closeModal();
           showToast('Receita salva');
           render();
         }
-      });
+      }, target);
       break;
-    case 'delete-income':
-      if (confirm('Excluir esta receita?')) {
+    case 'delete-income': {
+      const confirmed = await showConfirm('Excluir esta receita?', {
+        title: 'Excluir receita',
+        confirmLabel: 'Excluir'
+      });
+      if (confirmed) {
         await runAction(async () => {
           await deleteIncome(data, target.dataset.incomeId);
           showToast('Receita excluida');
@@ -1316,6 +1540,7 @@ async function handleContentClick(e) {
         });
       }
       break;
+    }
     case 'new-expense':
       openExpenseModal();
       break;
@@ -1323,16 +1548,20 @@ async function handleContentClick(e) {
       openExpenseModal(target.dataset.expenseId);
       break;
     case 'save-expense':
-      await runAction(async () => {
+      await runSaveAction(async () => {
         if (await handleSaveExpense(data, getCurrentUser(data).id, target.dataset.expenseId || null)) {
           closeModal();
           showToast('Gasto salvo');
           render();
         }
-      });
+      }, target);
       break;
-    case 'delete-expense':
-      if (confirm('Excluir este gasto?')) {
+    case 'delete-expense': {
+      const confirmed = await showConfirm('Excluir este gasto?', {
+        title: 'Excluir gasto',
+        confirmLabel: 'Excluir'
+      });
+      if (confirmed) {
         await runAction(async () => {
           await deleteExpense(data, target.dataset.expenseId);
           showToast('Gasto excluido');
@@ -1340,6 +1569,7 @@ async function handleContentClick(e) {
         });
       }
       break;
+    }
     case 'new-goal':
       openGoalModal();
       break;
@@ -1347,16 +1577,20 @@ async function handleContentClick(e) {
       openGoalModal(target.dataset.goalId);
       break;
     case 'save-goal':
-      await runAction(async () => {
+      await runSaveAction(async () => {
         if (await handleSaveGoal(data, getCurrentUser(data).id, target.dataset.goalId || null)) {
           closeModal();
           showToast('Objetivo salvo');
           render();
         }
-      });
+      }, target);
       break;
-    case 'delete-goal':
-      if (confirm('Excluir este objetivo?')) {
+    case 'delete-goal': {
+      const confirmed = await showConfirm('Excluir este objetivo?', {
+        title: 'Excluir objetivo',
+        confirmLabel: 'Excluir'
+      });
+      if (confirmed) {
         await runAction(async () => {
           await deleteGoal(data, target.dataset.goalId);
           showToast('Objetivo excluido');
@@ -1364,47 +1598,49 @@ async function handleContentClick(e) {
         });
       }
       break;
+    }
     case 'save-salary':
-      await runAction(async () => {
+      await runSaveAction(async () => {
         if (await handleSaveSalary(data, getCurrentUser(data).id)) {
           closeModal();
           showToast('Salario atualizado');
           render();
         }
-      });
+      }, target);
       break;
-    case 'save-savings':
-      await runAction(async () => {
-        if (await handleSaveSavings(data, getCurrentUser(data).id)) {
-          closeModal();
-          showToast('Poupanca atualizada');
-          render();
-        }
-      });
+    case 'confirm-ok':
+      resolveConfirm(true);
+      break;
+    case 'confirm-cancel':
+      resolveConfirm(false);
       break;
     case 'close-modal':
-      closeModal();
+      if (confirmResolver) {
+        resolveConfirm(false);
+      } else {
+        closeModal();
+      }
       break;
     case 'save-course':
-      await runAction(() => handleSaveCourse(target.dataset.courseId || null));
+      await runSaveAction(() => handleSaveCourse(target.dataset.courseId || null), target);
       break;
     case 'save-module':
-      await runAction(() => handleSaveModule(target.dataset.courseId, target.dataset.moduleId || null));
+      await runSaveAction(() => handleSaveModule(target.dataset.courseId, target.dataset.moduleId || null), target);
       break;
     case 'save-lesson':
-      await runAction(() => handleSaveLesson(target.dataset.moduleId));
+      await runSaveAction(() => handleSaveLesson(target.dataset.moduleId), target);
       break;
     case 'save-activity':
-      await runAction(() => handleSaveActivity(target.dataset.courseId, target.dataset.activityId || null));
+      await runSaveAction(() => handleSaveActivity(target.dataset.courseId, target.dataset.activityId || null), target);
       break;
     case 'open-profile':
       openProfileModal();
       break;
     case 'save-profile':
-      await runAction(handleSaveProfile);
+      await runSaveAction(handleSaveProfile, target);
       break;
     case 'save-password':
-      await runAction(handleSavePassword);
+      await runSaveAction(handleSavePassword, target);
       break;
     case 'logout':
       await handleLogout();
@@ -1412,13 +1648,18 @@ async function handleContentClick(e) {
   }
 }
 
-function handleNavClick(e) {
+async function handleNavClick(e) {
   const btn = e.target.closest('.nav-item, .bottom-nav-item');
   if (!btn) return;
 
   setActiveNav(btn.dataset.view);
   currentView = btn.dataset.view;
   selectedCourseId = null;
+
+  if (currentView === 'ranking') {
+    await refreshRanking();
+  }
+
   render();
 }
 
@@ -1445,28 +1686,47 @@ function setupEventListeners() {
   topbarProfile.addEventListener('click', () => openProfileModal());
 
   modalOverlay.addEventListener('click', e => {
-    if (e.target === modalOverlay) closeModal();
+    if (e.target === modalOverlay) {
+      if (confirmResolver) {
+        resolveConfirm(false);
+      } else {
+        closeModal();
+      }
+    }
     handleContentClick(e);
   });
 
   document.querySelector('.sidebar-nav').addEventListener('click', handleNavClick);
   document.getElementById('bottom-nav').addEventListener('click', handleNavClick);
-  document.getElementById('modal-close').addEventListener('click', closeModal);
+  document.getElementById('modal-close').addEventListener('click', () => {
+    if (confirmResolver) {
+      resolveConfirm(false);
+    } else {
+      closeModal();
+    }
+  });
 
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && !modalOverlay.hidden) closeModal();
+    if (e.key === 'Escape' && !modalOverlay.hidden) {
+      if (confirmResolver) {
+        resolveConfirm(false);
+      } else {
+        closeModal();
+      }
+    }
   });
 }
 
 async function bootstrapApp() {
   recalculateAllUsersStats(data);
-  await refreshRanking();
+  await refreshRanking({ force: true });
   renderUserInfo();
   renderTopbarStats();
   render();
 }
 
 async function init() {
+  registerSyncLifecycle();
   document.getElementById('login-form').addEventListener('submit', handleLogin);
   document.getElementById('register-form').addEventListener('submit', handleRegister);
   document.getElementById('show-register').addEventListener('click', () => showAuthMode('register'));
@@ -1479,6 +1739,7 @@ async function init() {
       showAuthScreen(false);
       setupEventListeners();
       await bootstrapApp();
+      scrollToTop();
       showToast('E-mail confirmado! Bem-vindo.');
       return;
     }
@@ -1499,6 +1760,7 @@ async function init() {
     showAuthScreen(false);
     setupEventListeners();
     await bootstrapApp();
+    scrollToTop();
   } catch (err) {
     console.error(err);
     showAuthScreen(true);

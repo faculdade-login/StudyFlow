@@ -50,7 +50,6 @@ export function calcFinanceSummary({
   monthKey = getCurrentMonthKey()
 }) {
   const monthlySalary = Number(settings.monthlySalary) || 0;
-  const currentSavings = Number(settings.currentSavings) || 0;
 
   const monthIncomes = getIncomesForMonth(incomes, monthKey);
   const extraIncome = sumAmounts(monthIncomes);
@@ -81,6 +80,7 @@ export function calcFinanceSummary({
   const totalCommitted = paidBillsTotal + unpaidBillsTotal + expensesTotal + debtsDueTotal;
   const monthlyBalance = totalIncome - totalCommitted;
   const potentialSavings = monthlyBalance + totalSuperfluous;
+  const currentSavings = monthlyBalance;
 
   return {
     monthKey,

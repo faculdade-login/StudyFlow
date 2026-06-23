@@ -105,9 +105,25 @@ export function calcHoursStudied(courses, getLessonsFn) {
   return Math.round(hours * 10) / 10;
 }
 
-export function isCourseComplete(lessons) {
+/**
+ * Curso concluido somente quando cada modulo tem ao menos uma aula
+ * e todas as aulas de todos os modulos estao completas.
+ */
+export function isCourseComplete(lessons, modules = null) {
+  if (modules && modules.length > 0) {
+    return modules.every(module => {
+      const moduleLessons = lessons.filter(l => l.moduleId === module.id);
+      return moduleLessons.length > 0 && moduleLessons.every(l => l.completed);
+    });
+  }
+
   if (lessons.length === 0) return false;
   return lessons.every(l => l.completed);
+}
+
+export function generateLessonBatchNames(quantity, baseName = 'Aula') {
+  const name = baseName.trim() || 'Aula';
+  return Array.from({ length: quantity }, (_, i) => `${i + 1} - ${name}`);
 }
 
 export function escapeHtml(str) {
@@ -120,6 +136,12 @@ export function formatHours(hours, options = {}) {
   const value = Number(hours) || 0;
   const formatted = `${value % 1 === 0 ? value : value.toFixed(1)}h`;
   return options.estimated ? `~${formatted}` : formatted;
+}
+
+export function formatOrdinal(position) {
+  const n = Number(position);
+  if (!n || n < 1) return '-';
+  return `${n}°`;
 }
 
 export function getInitials(name) {

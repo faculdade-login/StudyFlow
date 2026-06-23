@@ -42,6 +42,22 @@ import {
 
 import { escapeHtml, formatDate } from './utils.js';
 
+const FINANCE_EDIT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
+const FINANCE_DELETE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+
+function renderFinanceItemActions(editAction, editAttr, deleteAction, deleteAttr) {
+  return `
+    <div class="finance-item-actions">
+      <button type="button" class="finance-action-btn finance-action-edit" data-action="${editAction}" ${editAttr} aria-label="Editar" title="Editar">
+        ${FINANCE_EDIT_ICON}
+      </button>
+      <button type="button" class="finance-action-btn finance-action-delete" data-action="${deleteAction}" ${deleteAttr} aria-label="Excluir" title="Excluir">
+        ${FINANCE_DELETE_ICON}
+      </button>
+    </div>
+  `;
+}
+
 export function renderFinancePage(data, userId, selectedTab = 'overview') {
   const settings = getFinanceSettings(data, userId);
   const incomes = getIncomesByUser(data, userId);
@@ -70,13 +86,13 @@ export function renderFinancePage(data, userId, selectedTab = 'overview') {
       </div>
     </div>
 
-    <div class="finance-tabs">
-      <button class="tab ${selectedTab === 'overview' ? 'active' : ''}" data-action="finance-tab" data-tab="overview">Visão Geral</button>
-      <button class="tab ${selectedTab === 'bills' ? 'active' : ''}" data-action="finance-tab" data-tab="bills">Contas Mensais</button>
-      <button class="tab ${selectedTab === 'debts' ? 'active' : ''}" data-action="finance-tab" data-tab="debts">Dívidas</button>
-      <button class="tab ${selectedTab === 'incomes' ? 'active' : ''}" data-action="finance-tab" data-tab="incomes">Receitas</button>
-      <button class="tab ${selectedTab === 'expenses' ? 'active' : ''}" data-action="finance-tab" data-tab="expenses">Gastos</button>
-      <button class="tab ${selectedTab === 'goals' ? 'active' : ''}" data-action="finance-tab" data-tab="goals">Objetivos</button>
+    <div class="finance-tabs" id="finance-tabs">
+      <button class="btn btn-sm finance-tab-btn ${selectedTab === 'overview' ? 'btn-primary' : 'btn-secondary'}" data-action="finance-tab" data-tab="overview">Visão Geral</button>
+      <button class="btn btn-sm finance-tab-btn ${selectedTab === 'bills' ? 'btn-primary' : 'btn-secondary'}" data-action="finance-tab" data-tab="bills">Contas Mensais</button>
+      <button class="btn btn-sm finance-tab-btn ${selectedTab === 'debts' ? 'btn-primary' : 'btn-secondary'}" data-action="finance-tab" data-tab="debts">Dívidas</button>
+      <button class="btn btn-sm finance-tab-btn ${selectedTab === 'incomes' ? 'btn-primary' : 'btn-secondary'}" data-action="finance-tab" data-tab="incomes">Receitas</button>
+      <button class="btn btn-sm finance-tab-btn ${selectedTab === 'expenses' ? 'btn-primary' : 'btn-secondary'}" data-action="finance-tab" data-tab="expenses">Gastos</button>
+      <button class="btn btn-sm finance-tab-btn ${selectedTab === 'goals' ? 'btn-primary' : 'btn-secondary'}" data-action="finance-tab" data-tab="goals">Objetivos</button>
     </div>
 
     ${selectedTab === 'overview' ? renderFinanceOverview(settings, summary, health, goals) : ''}
@@ -104,13 +120,10 @@ function renderFinanceOverview(settings, summary, health, goals) {
         <div class="stat-label">Gastos do Mês</div>
         <div class="stat-value finance-stat">${formatCurrency(summary.totalCommitted)}</div>
       </div>
-      <div class="stat-card ${summary.monthlyBalance >= 0 ? 'accent' : 'danger'}">
-        <div class="stat-label">Saldo do Mês</div>
-        <div class="stat-value finance-stat">${formatCurrency(summary.monthlyBalance)}</div>
-      </div>
-      <div class="stat-card purple">
+      <div class="stat-card ${summary.currentSavings >= 0 ? 'purple' : 'danger'}">
         <div class="stat-label">Poupança Atual</div>
         <div class="stat-value finance-stat">${formatCurrency(summary.currentSavings)}</div>
+        <p class="stat-hint">O que sobra: receitas − gastos</p>
       </div>
     </div>
 
@@ -138,7 +151,6 @@ function renderFinanceOverview(settings, summary, health, goals) {
           <span class="finance-salary-amount">${formatCurrency(settings.monthlySalary)}</span>
           <span class="finance-salary-hint">/ mês</span>
         </div>
-        <button class="btn btn-ghost btn-sm" data-action="edit-savings">Poupança atual: ${formatCurrency(settings.currentSavings)}</button>
       </div>
     </div>
 
@@ -206,10 +218,7 @@ function renderMonthlyBills(bills, monthKey) {
                   <span class="finance-item-amount">${formatCurrency(bill.amount)}</span>
                 </div>
               </div>
-              <div class="finance-item-actions">
-                <button class="btn-icon" data-action="edit-monthly-bill" data-bill-id="${bill.id}" aria-label="Editar">✎</button>
-                <button class="btn-icon danger" data-action="delete-monthly-bill" data-bill-id="${bill.id}" aria-label="Excluir">×</button>
-              </div>
+              ${renderFinanceItemActions('edit-monthly-bill', `data-bill-id="${bill.id}"`, 'delete-monthly-bill', `data-bill-id="${bill.id}"`)}
             </div>
           `;
         }).join('')}
@@ -251,10 +260,7 @@ function renderDebtItem(debt) {
           <span class="finance-item-amount">${formatCurrency(debt.amount)}</span>
         </div>
       </div>
-      <div class="finance-item-actions">
-        <button class="btn-icon" data-action="edit-debt" data-debt-id="${debt.id}">✎</button>
-        <button class="btn-icon danger" data-action="delete-debt" data-debt-id="${debt.id}">×</button>
-      </div>
+      ${renderFinanceItemActions('edit-debt', `data-debt-id="${debt.id}"`, 'delete-debt', `data-debt-id="${debt.id}"`)}
     </div>
   `;
 }
@@ -290,10 +296,7 @@ function renderIncomes(settings, incomes, monthKey) {
                 <span class="finance-item-amount positive">${formatCurrency(income.amount)}</span>
               </div>
             </div>
-            <div class="finance-item-actions">
-              <button class="btn-icon" data-action="edit-income" data-income-id="${income.id}">✎</button>
-              <button class="btn-icon danger" data-action="delete-income" data-income-id="${income.id}">×</button>
-            </div>
+            ${renderFinanceItemActions('edit-income', `data-income-id="${income.id}"`, 'delete-income', `data-income-id="${income.id}"`)}
           </div>
         `).join('')}
       </div>
@@ -324,10 +327,7 @@ function renderExpenses(expenses, monthKey) {
                 <span class="finance-item-amount">${formatCurrency(expense.amount)}</span>
               </div>
             </div>
-            <div class="finance-item-actions">
-              <button class="btn-icon" data-action="edit-expense" data-expense-id="${expense.id}">✎</button>
-              <button class="btn-icon danger" data-action="delete-expense" data-expense-id="${expense.id}">×</button>
-            </div>
+            ${renderFinanceItemActions('edit-expense', `data-expense-id="${expense.id}"`, 'delete-expense', `data-expense-id="${expense.id}"`)}
           </div>
         `).join('')}
       </div>
@@ -361,10 +361,7 @@ function renderGoalCard(goal, summary) {
     <div class="finance-goal-card">
       <div class="finance-goal-header">
         <h4>${escapeHtml(goal.name)}</h4>
-        <div class="finance-item-actions">
-          <button class="btn-icon" data-action="edit-goal" data-goal-id="${goal.id}">✎</button>
-          <button class="btn-icon danger" data-action="delete-goal" data-goal-id="${goal.id}">×</button>
-        </div>
+        ${renderFinanceItemActions('edit-goal', `data-goal-id="${goal.id}"`, 'delete-goal', `data-goal-id="${goal.id}"`)}
       </div>
       <div class="finance-goal-progress">
         <div class="finance-goal-amounts">
@@ -404,18 +401,6 @@ export function salaryForm(settings) {
       <div class="form-group">
         <label>Salário fixo mensal <span class="required">*</span></label>
         <input type="number" class="form-input" name="monthlySalary" min="0" step="0.01" required value="${settings.monthlySalary || ''}" placeholder="Ex: 3500">
-      </div>
-    </form>
-  `;
-}
-
-export function savingsForm(settings) {
-  return `
-    <form id="modal-form">
-      <div class="form-group">
-        <label>Quanto você já tem guardado</label>
-        <input type="number" class="form-input" name="currentSavings" min="0" step="0.01" required value="${settings.currentSavings || ''}" placeholder="Ex: 1500">
-        <p class="form-hint">Usado para acompanhar sua reserva e objetivos.</p>
       </div>
     </form>
   `;
@@ -549,14 +534,6 @@ export async function handleSaveSalary(data, userId) {
   if (!form.reportValidity()) return false;
   const monthlySalary = parseFloat(form.querySelector('[name="monthlySalary"]').value) || 0;
   await updateFinanceSettings(data, userId, { monthlySalary });
-  return true;
-}
-
-export async function handleSaveSavings(data, userId) {
-  const form = document.getElementById('modal-form');
-  if (!form.reportValidity()) return false;
-  const currentSavings = parseFloat(form.querySelector('[name="currentSavings"]').value) || 0;
-  await updateFinanceSettings(data, userId, { currentSavings });
   return true;
 }
 

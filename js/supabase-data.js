@@ -145,8 +145,7 @@ export async function fetchUserData(userId, email = '') {
     billsRes,
     debtsRes,
     expensesRes,
-    goalsRes,
-    rankingRes
+    goalsRes
   ] = await Promise.all([
     supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
     supabase.from('courses').select('*').eq('user_id', userId),
@@ -155,8 +154,7 @@ export async function fetchUserData(userId, email = '') {
     supabase.from('finance_monthly_bills').select('*').eq('user_id', userId),
     supabase.from('finance_debts').select('*').eq('user_id', userId),
     supabase.from('finance_expenses').select('*').eq('user_id', userId),
-    supabase.from('finance_goals').select('*').eq('user_id', userId),
-    fetchRankingUsers().catch(() => [])
+    supabase.from('finance_goals').select('*').eq('user_id', userId)
   ]);
 
   const errors = [
@@ -200,13 +198,9 @@ export async function fetchUserData(userId, email = '') {
     ? mapProfile(profileRes.data, email)
     : mapProfile({ id: userId, name: 'Usuario', lessons_completed: 0, hours_studied: 0 }, email);
 
-  const users = rankingRes.length ? rankingRes : [profile];
-  const userInRanking = users.some(u => u.id === userId);
-  if (!userInRanking) users.push(profile);
-
   return {
     currentUserId: userId,
-    users,
+    users: [profile],
     courses,
     modules,
     lessons: (lessonsRes.data ?? []).map(mapLesson),
@@ -317,6 +311,22 @@ export async function insertLesson(moduleId, lesson) {
 
   if (error) throw error;
   return mapLesson(data);
+}
+
+export async function insertLessonsBatch(moduleId, lessons) {
+  if (!lessons.length) return [];
+
+  const rows = lessons.map((lesson, index) => ({
+    module_id: moduleId,
+    name: lesson.name,
+    sort_order: lesson.order ?? index,
+    completed: lesson.completed ?? false,
+    completed_at: lesson.completedAt ?? null
+  }));
+
+  const { data, error } = await supabase.from('lessons').insert(rows).select();
+  if (error) throw error;
+  return (data ?? []).map(mapLesson);
 }
 
 export async function updateLessonRow(lessonId, updates) {
