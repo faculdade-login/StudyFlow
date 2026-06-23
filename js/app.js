@@ -4,8 +4,6 @@
 
 import {
   loadData,
-  saveData,
-  generateId,
   getCurrentUser,
   getCoursesByUser,
   getModulesByCourse,
@@ -33,8 +31,9 @@ import {
   loginUser,
   registerUser,
   logoutUser,
-  isLoggedIn,
   restoreSessionUser,
+  handleAuthRedirect,
+  refreshRanking,
   getRanking,
   recalculateUserLessons,
   recalculateAllUsersStats,
@@ -110,13 +109,22 @@ const authLoginPanel = document.getElementById('auth-login');
 const authRegisterPanel = document.getElementById('auth-register');
 const topbarProfile = document.getElementById('topbar-profile');
 
-function refresh() {
+async function refresh() {
   data = loadData();
   recalculateUserLessons(data, data.currentUserId);
-  saveData(data);
+  await refreshRanking();
   renderUserInfo();
   renderTopbarStats();
   render();
+}
+
+async function runAction(action) {
+  try {
+    await action();
+  } catch (err) {
+    console.error(err);
+    showToast(err.message || 'Erro ao salvar dados.', 'error');
+  }
 }
 
 function setActiveNav(view) {
@@ -811,13 +819,13 @@ function openProfileModal() {
   `, { profile: true });
 }
 
-function handleSaveProfile() {
+async function handleSaveProfile() {
   const form = document.getElementById('profile-form');
   if (!form.reportValidity()) return;
 
   const user = getCurrentUser(data);
   const formData = new FormData(form);
-  const result = updateUserProfile(data, user.id, {
+  const result = await updateUserProfile(data, user.id, {
     name: formData.get('name'),
     email: formData.get('email')
   });
@@ -832,10 +840,10 @@ function handleSaveProfile() {
   errorEl.hidden = true;
   showToast('Perfil atualizado');
   closeModal();
-  refresh();
+  await refresh();
 }
 
-function handleSavePassword() {
+async function handleSavePassword() {
   const form = document.getElementById('password-form');
   const current = form.querySelector('[name="currentPassword"]').value;
   const newPass = form.querySelector('[name="newPassword"]').value;
@@ -855,7 +863,7 @@ function handleSavePassword() {
   }
 
   const user = getCurrentUser(data);
-  const result = changeUserPassword(data, user.id, current, newPass);
+  const result = await changeUserPassword(data, user.id, current, newPass);
 
   if (!result.success) {
     errorEl.textContent = result.error;
@@ -868,9 +876,9 @@ function handleSavePassword() {
   showToast('Senha alterada com sucesso');
 }
 
-function handleLogout() {
+async function handleLogout() {
   if (!confirm('Deseja sair da sua conta?')) return;
-  logoutUser();
+  await logoutUser();
   closeModal();
   showAuthScreen(true);
 }
@@ -896,25 +904,32 @@ function showAuthScreen(show) {
   }
 }
 
-function handleLogin(e) {
+async function handleLogin(e) {
   e.preventDefault();
   const form = e.target;
   const formData = new FormData(form);
-  const result = loginUser(data, formData.get('email'), formData.get('password'));
 
-  if (!result.success) {
-    authError.textContent = result.error;
+  try {
+    const result = await loginUser(formData.get('email'), formData.get('password'));
+
+    if (!result.success) {
+      authError.textContent = result.error;
+      authError.hidden = false;
+      return;
+    }
+
+    authError.hidden = true;
+    data = loadData();
+    showAuthScreen(false);
+    setupEventListeners();
+    await bootstrapApp();
+  } catch (err) {
+    authError.textContent = err.message || 'Erro ao entrar.';
     authError.hidden = false;
-    return;
   }
-
-  authError.hidden = true;
-  showAuthScreen(false);
-  setupEventListeners();
-  bootstrapApp();
 }
 
-function handleRegister(e) {
+async function handleRegister(e) {
   e.preventDefault();
   const form = e.target;
   const formData = new FormData(form);
@@ -927,22 +942,28 @@ function handleRegister(e) {
     return;
   }
 
-  const result = registerUser(data, {
-    name: formData.get('name'),
-    email: formData.get('email'),
-    password
-  });
+  try {
+    const result = await registerUser({
+      name: formData.get('name'),
+      email: formData.get('email'),
+      password
+    });
 
-  if (!result.success) {
-    registerError.textContent = result.error;
+    if (!result.success) {
+      registerError.textContent = result.error;
+      registerError.hidden = false;
+      return;
+    }
+
+    registerError.hidden = true;
+    data = loadData();
+    showAuthScreen(false);
+    setupEventListeners();
+    await bootstrapApp();
+  } catch (err) {
+    registerError.textContent = err.message || 'Erro ao cadastrar.';
     registerError.hidden = false;
-    return;
   }
-
-  registerError.hidden = true;
-  showAuthScreen(false);
-  setupEventListeners();
-  bootstrapApp();
 }
 
 function openNewCourseModal() {
@@ -1003,7 +1024,7 @@ function openEditActivityModal(activityId) {
   `);
 }
 
-function handleSaveCourse(courseId = null) {
+async function handleSaveCourse(courseId = null) {
   const form = document.getElementById('modal-form');
   if (!form.reportValidity()) return;
 
@@ -1017,56 +1038,44 @@ function handleSaveCourse(courseId = null) {
   };
 
   if (courseId) {
-    updateCourse(data, courseId, courseData);
+    await updateCourse(data, courseId, courseData);
     showToast('Curso atualizado com sucesso');
   } else {
-    const user = getCurrentUser(data);
-    addCourse(data, {
-      id: generateId(),
-      userId: user.id,
-      ...courseData,
-      createdAt: new Date().toISOString()
-    });
+    await addCourse(data, courseData);
     showToast('Curso cadastrado com sucesso');
   }
 
   closeModal();
-  refresh();
+  await refresh();
 }
 
-function handleSaveModule(courseId, moduleId = null) {
+async function handleSaveModule(courseId, moduleId = null) {
   const form = document.getElementById('modal-form');
   if (!form.reportValidity()) return;
 
   const name = form.querySelector('[name="name"]').value.trim();
 
   if (moduleId) {
-    updateModule(data, moduleId, { name });
+    await updateModule(data, moduleId, { name });
     showToast('Modulo atualizado');
   } else {
     const modules = getModulesByCourse(data, courseId);
-    addModule(data, {
-      id: generateId(),
-      courseId,
-      name,
-      order: modules.length
-    });
+    await addModule(data, { courseId, name, order: modules.length });
     showToast('Modulo adicionado');
   }
 
   closeModal();
-  refresh();
+  await refresh();
 }
 
-function handleSaveLesson(moduleId) {
+async function handleSaveLesson(moduleId) {
   const form = document.getElementById('modal-form');
   if (!form.reportValidity()) return;
 
   const name = form.querySelector('[name="name"]').value.trim();
   const lessons = getLessonsByModule(data, moduleId);
 
-  addLesson(data, {
-    id: generateId(),
+  await addLesson(data, {
     moduleId,
     name,
     order: lessons.length,
@@ -1076,10 +1085,10 @@ function handleSaveLesson(moduleId) {
 
   closeModal();
   showToast('Aula adicionada');
-  refresh();
+  await refresh();
 }
 
-function handleSaveActivity(courseId, activityId = null) {
+async function handleSaveActivity(courseId, activityId = null) {
   const form = document.getElementById('modal-form');
   if (!form.reportValidity()) return;
 
@@ -1090,11 +1099,10 @@ function handleSaveActivity(courseId, activityId = null) {
   };
 
   if (activityId) {
-    updateActivity(data, activityId, activityData);
+    await updateActivity(data, activityId, activityData);
     showToast('Atividade atualizada');
   } else {
-    addActivity(data, {
-      id: generateId(),
+    await addActivity(data, {
       courseId,
       ...activityData,
       completed: false,
@@ -1104,10 +1112,10 @@ function handleSaveActivity(courseId, activityId = null) {
   }
 
   closeModal();
-  refresh();
+  await refresh();
 }
 
-function handleContentClick(e) {
+async function handleContentClick(e) {
   const target = e.target.closest('[data-action]');
   if (!target) return;
 
@@ -1133,11 +1141,13 @@ function handleContentClick(e) {
       break;
     case 'delete-course':
       if (confirm('Tem certeza que deseja excluir este curso? Todos os modulos, aulas e atividades serao removidos.')) {
-        deleteCourse(data, target.dataset.courseId);
-        currentView = 'courses';
-        selectedCourseId = null;
-        showToast('Curso excluido');
-        refresh();
+        await runAction(async () => {
+          await deleteCourse(data, target.dataset.courseId);
+          currentView = 'courses';
+          selectedCourseId = null;
+          showToast('Curso excluido');
+          await refresh();
+        });
       }
       break;
     case 'switch-tab':
@@ -1152,23 +1162,29 @@ function handleContentClick(e) {
       break;
     case 'delete-module':
       if (confirm('Excluir este modulo e todas as suas aulas?')) {
-        deleteModule(data, target.dataset.moduleId);
-        showToast('Modulo excluido');
-        refresh();
+        await runAction(async () => {
+          await deleteModule(data, target.dataset.moduleId);
+          showToast('Modulo excluido');
+          await refresh();
+        });
       }
       break;
     case 'new-lesson':
       openNewLessonModal(target.dataset.moduleId);
       break;
     case 'toggle-lesson':
-      toggleLesson(data, target.dataset.lessonId);
-      refresh();
+      await runAction(async () => {
+        await toggleLesson(data, target.dataset.lessonId);
+        await refresh();
+      });
       break;
     case 'delete-lesson':
       if (confirm('Excluir esta aula?')) {
-        deleteLesson(data, target.dataset.lessonId);
-        showToast('Aula excluida');
-        refresh();
+        await runAction(async () => {
+          await deleteLesson(data, target.dataset.lessonId);
+          showToast('Aula excluida');
+          await refresh();
+        });
       }
       break;
     case 'new-activity':
@@ -1178,14 +1194,18 @@ function handleContentClick(e) {
       openEditActivityModal(target.dataset.activityId);
       break;
     case 'toggle-activity':
-      toggleActivity(data, target.dataset.activityId);
-      refresh();
+      await runAction(async () => {
+        await toggleActivity(data, target.dataset.activityId);
+        await refresh();
+      });
       break;
     case 'delete-activity':
       if (confirm('Excluir esta atividade?')) {
-        deleteActivity(data, target.dataset.activityId);
-        showToast('Atividade excluida');
-        refresh();
+        await runAction(async () => {
+          await deleteActivity(data, target.dataset.activityId);
+          showToast('Atividade excluida');
+          await refresh();
+        });
       }
       break;
     case 'go-ranking':
@@ -1219,21 +1239,27 @@ function handleContentClick(e) {
       openMonthlyBillModal(target.dataset.billId);
       break;
     case 'save-monthly-bill':
-      if (handleSaveMonthlyBill(data, getCurrentUser(data).id, target.dataset.billId || null)) {
-        closeModal();
-        showToast('Conta salva');
-        render();
-      }
+      await runAction(async () => {
+        if (await handleSaveMonthlyBill(data, getCurrentUser(data).id, target.dataset.billId || null)) {
+          closeModal();
+          showToast('Conta salva');
+          render();
+        }
+      });
       break;
     case 'toggle-bill-paid':
-      toggleMonthlyBillPaid(data, target.dataset.billId, getCurrentMonthKey());
-      render();
+      await runAction(async () => {
+        await toggleMonthlyBillPaid(data, target.dataset.billId, getCurrentMonthKey());
+        render();
+      });
       break;
     case 'delete-monthly-bill':
       if (confirm('Excluir esta conta mensal?')) {
-        deleteMonthlyBill(data, target.dataset.billId);
-        showToast('Conta excluida');
-        render();
+        await runAction(async () => {
+          await deleteMonthlyBill(data, target.dataset.billId);
+          showToast('Conta excluida');
+          render();
+        });
       }
       break;
     case 'new-debt':
@@ -1243,21 +1269,27 @@ function handleContentClick(e) {
       openDebtModal(target.dataset.debtId);
       break;
     case 'save-debt':
-      if (handleSaveDebt(data, getCurrentUser(data).id, target.dataset.debtId || null)) {
-        closeModal();
-        showToast('Divida salva');
-        render();
-      }
+      await runAction(async () => {
+        if (await handleSaveDebt(data, getCurrentUser(data).id, target.dataset.debtId || null)) {
+          closeModal();
+          showToast('Divida salva');
+          render();
+        }
+      });
       break;
     case 'toggle-debt-paid':
-      toggleDebtPaid(data, target.dataset.debtId);
-      render();
+      await runAction(async () => {
+        await toggleDebtPaid(data, target.dataset.debtId);
+        render();
+      });
       break;
     case 'delete-debt':
       if (confirm('Excluir esta divida?')) {
-        deleteDebt(data, target.dataset.debtId);
-        showToast('Divida excluida');
-        render();
+        await runAction(async () => {
+          await deleteDebt(data, target.dataset.debtId);
+          showToast('Divida excluida');
+          render();
+        });
       }
       break;
     case 'new-income':
@@ -1267,17 +1299,21 @@ function handleContentClick(e) {
       openIncomeModal(target.dataset.incomeId);
       break;
     case 'save-income':
-      if (handleSaveIncome(data, getCurrentUser(data).id, target.dataset.incomeId || null)) {
-        closeModal();
-        showToast('Receita salva');
-        render();
-      }
+      await runAction(async () => {
+        if (await handleSaveIncome(data, getCurrentUser(data).id, target.dataset.incomeId || null)) {
+          closeModal();
+          showToast('Receita salva');
+          render();
+        }
+      });
       break;
     case 'delete-income':
       if (confirm('Excluir esta receita?')) {
-        deleteIncome(data, target.dataset.incomeId);
-        showToast('Receita excluida');
-        render();
+        await runAction(async () => {
+          await deleteIncome(data, target.dataset.incomeId);
+          showToast('Receita excluida');
+          render();
+        });
       }
       break;
     case 'new-expense':
@@ -1287,17 +1323,21 @@ function handleContentClick(e) {
       openExpenseModal(target.dataset.expenseId);
       break;
     case 'save-expense':
-      if (handleSaveExpense(data, getCurrentUser(data).id, target.dataset.expenseId || null)) {
-        closeModal();
-        showToast('Gasto salvo');
-        render();
-      }
+      await runAction(async () => {
+        if (await handleSaveExpense(data, getCurrentUser(data).id, target.dataset.expenseId || null)) {
+          closeModal();
+          showToast('Gasto salvo');
+          render();
+        }
+      });
       break;
     case 'delete-expense':
       if (confirm('Excluir este gasto?')) {
-        deleteExpense(data, target.dataset.expenseId);
-        showToast('Gasto excluido');
-        render();
+        await runAction(async () => {
+          await deleteExpense(data, target.dataset.expenseId);
+          showToast('Gasto excluido');
+          render();
+        });
       }
       break;
     case 'new-goal':
@@ -1307,59 +1347,67 @@ function handleContentClick(e) {
       openGoalModal(target.dataset.goalId);
       break;
     case 'save-goal':
-      if (handleSaveGoal(data, getCurrentUser(data).id, target.dataset.goalId || null)) {
-        closeModal();
-        showToast('Objetivo salvo');
-        render();
-      }
+      await runAction(async () => {
+        if (await handleSaveGoal(data, getCurrentUser(data).id, target.dataset.goalId || null)) {
+          closeModal();
+          showToast('Objetivo salvo');
+          render();
+        }
+      });
       break;
     case 'delete-goal':
       if (confirm('Excluir este objetivo?')) {
-        deleteGoal(data, target.dataset.goalId);
-        showToast('Objetivo excluido');
-        render();
+        await runAction(async () => {
+          await deleteGoal(data, target.dataset.goalId);
+          showToast('Objetivo excluido');
+          render();
+        });
       }
       break;
     case 'save-salary':
-      if (handleSaveSalary(data, getCurrentUser(data).id)) {
-        closeModal();
-        showToast('Salario atualizado');
-        render();
-      }
+      await runAction(async () => {
+        if (await handleSaveSalary(data, getCurrentUser(data).id)) {
+          closeModal();
+          showToast('Salario atualizado');
+          render();
+        }
+      });
       break;
     case 'save-savings':
-      if (handleSaveSavings(data, getCurrentUser(data).id)) {
-        closeModal();
-        showToast('Poupanca atualizada');
-        render();
-      }
+      await runAction(async () => {
+        if (await handleSaveSavings(data, getCurrentUser(data).id)) {
+          closeModal();
+          showToast('Poupanca atualizada');
+          render();
+        }
+      });
       break;
     case 'close-modal':
       closeModal();
       break;
     case 'save-course':
-      handleSaveCourse(target.dataset.courseId || null);
+      await runAction(() => handleSaveCourse(target.dataset.courseId || null));
       break;
     case 'save-module':
-      handleSaveModule(target.dataset.courseId, target.dataset.moduleId || null);
+      await runAction(() => handleSaveModule(target.dataset.courseId, target.dataset.moduleId || null));
       break;
     case 'save-lesson':
-      handleSaveLesson(target.dataset.moduleId);
+      await runAction(() => handleSaveLesson(target.dataset.moduleId));
       break;
     case 'save-activity':
-      handleSaveActivity(target.dataset.courseId, target.dataset.activityId || null);
+      await runAction(() => handleSaveActivity(target.dataset.courseId, target.dataset.activityId || null));
       break;
     case 'open-profile':
       openProfileModal();
       break;
     case 'save-profile':
-      handleSaveProfile();
+      await runAction(handleSaveProfile);
       break;
     case 'save-password':
-      handleSavePassword();
+      await runAction(handleSavePassword);
       break;
     case 'logout':
-      handleLogout();
+      await handleLogout();
       break;
   }
 }
@@ -1410,29 +1458,51 @@ function setupEventListeners() {
   });
 }
 
-function bootstrapApp() {
+async function bootstrapApp() {
   recalculateAllUsersStats(data);
-  saveData(data);
+  await refreshRanking();
   renderUserInfo();
   renderTopbarStats();
   render();
 }
 
-function init() {
-  data = loadData();
+async function init() {
   document.getElementById('login-form').addEventListener('submit', handleLogin);
   document.getElementById('register-form').addEventListener('submit', handleRegister);
   document.getElementById('show-register').addEventListener('click', () => showAuthMode('register'));
   document.getElementById('show-login').addEventListener('click', () => showAuthMode('login'));
 
-  if (!restoreSessionUser(data) && !isLoggedIn()) {
-    showAuthScreen(true);
-    return;
-  }
+  try {
+    const redirect = await handleAuthRedirect();
+    if (redirect.status === 'session') {
+      data = loadData();
+      showAuthScreen(false);
+      setupEventListeners();
+      await bootstrapApp();
+      showToast('E-mail confirmado! Bem-vindo.');
+      return;
+    }
+    if (redirect.status === 'error') {
+      showAuthScreen(true);
+      authError.textContent = redirect.message;
+      authError.hidden = false;
+      return;
+    }
 
-  showAuthScreen(false);
-  setupEventListeners();
-  bootstrapApp();
+    const restored = await restoreSessionUser();
+    if (!restored) {
+      showAuthScreen(true);
+      return;
+    }
+
+    data = loadData();
+    showAuthScreen(false);
+    setupEventListeners();
+    await bootstrapApp();
+  } catch (err) {
+    console.error(err);
+    showAuthScreen(true);
+  }
 }
 
 init();

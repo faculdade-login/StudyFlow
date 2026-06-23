@@ -1,23 +1,39 @@
 /**
- * Persistencia financeira — dados privados por usuario (userId).
+ * Persistencia financeira — Supabase (privado por usuario).
  */
 
-import { generateId, saveData } from './storage.js';
+import {
+  upsertFinanceSettings,
+  insertIncome,
+  updateIncomeRow,
+  deleteIncomeRow,
+  insertMonthlyBill,
+  updateMonthlyBillRow,
+  deleteMonthlyBillRow,
+  insertDebt,
+  updateDebtRow,
+  deleteDebtRow,
+  insertExpense,
+  updateExpenseRow,
+  deleteExpenseRow,
+  insertGoal,
+  updateGoalRow,
+  deleteGoalRow
+} from './supabase-data.js';
 
 export function getFinanceSettings(data, userId) {
   let settings = data.financeSettings.find(s => s.userId === userId);
   if (!settings) {
     settings = { userId, monthlySalary: 0, currentSavings: 0 };
     data.financeSettings.push(settings);
-    saveData(data);
   }
   return settings;
 }
 
-export function updateFinanceSettings(data, userId, updates) {
+export async function updateFinanceSettings(data, userId, updates) {
   const settings = getFinanceSettings(data, userId);
   Object.assign(settings, updates);
-  saveData(data);
+  await upsertFinanceSettings(userId, settings);
   return settings;
 }
 
@@ -50,45 +66,45 @@ export function getGoalsByUser(data, userId) {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
-export function addIncome(data, income) {
-  data.financeIncomes.push(income);
-  saveData(data);
-  return income;
+export async function addIncome(data, income) {
+  const created = await insertIncome(data.currentUserId, income);
+  data.financeIncomes.push(created);
+  return created;
 }
 
-export function updateIncome(data, incomeId, updates) {
+export async function updateIncome(data, incomeId, updates) {
   const index = data.financeIncomes.findIndex(i => i.id === incomeId);
   if (index === -1) return null;
+  await updateIncomeRow(incomeId, updates);
   data.financeIncomes[index] = { ...data.financeIncomes[index], ...updates };
-  saveData(data);
   return data.financeIncomes[index];
 }
 
-export function deleteIncome(data, incomeId) {
+export async function deleteIncome(data, incomeId) {
+  await deleteIncomeRow(incomeId);
   data.financeIncomes = data.financeIncomes.filter(i => i.id !== incomeId);
-  saveData(data);
 }
 
-export function addMonthlyBill(data, bill) {
-  data.financeMonthlyBills.push(bill);
-  saveData(data);
-  return bill;
+export async function addMonthlyBill(data, bill) {
+  const created = await insertMonthlyBill(data.currentUserId, bill);
+  data.financeMonthlyBills.push(created);
+  return created;
 }
 
-export function updateMonthlyBill(data, billId, updates) {
+export async function updateMonthlyBill(data, billId, updates) {
   const index = data.financeMonthlyBills.findIndex(b => b.id === billId);
   if (index === -1) return null;
+  await updateMonthlyBillRow(billId, updates);
   data.financeMonthlyBills[index] = { ...data.financeMonthlyBills[index], ...updates };
-  saveData(data);
   return data.financeMonthlyBills[index];
 }
 
-export function deleteMonthlyBill(data, billId) {
+export async function deleteMonthlyBill(data, billId) {
+  await deleteMonthlyBillRow(billId);
   data.financeMonthlyBills = data.financeMonthlyBills.filter(b => b.id !== billId);
-  saveData(data);
 }
 
-export function toggleMonthlyBillPaid(data, billId, monthKey) {
+export async function toggleMonthlyBillPaid(data, billId, monthKey) {
   const bill = data.financeMonthlyBills.find(b => b.id === billId);
   if (!bill) return null;
 
@@ -100,72 +116,72 @@ export function toggleMonthlyBillPaid(data, billId, monthKey) {
     bill.paidMonth = monthKey;
   }
 
-  saveData(data);
+  await updateMonthlyBillRow(billId, { paid: bill.paid, paidMonth: bill.paidMonth });
   return bill;
 }
 
-export function addDebt(data, debt) {
-  data.financeDebts.push(debt);
-  saveData(data);
-  return debt;
+export async function addDebt(data, debt) {
+  const created = await insertDebt(data.currentUserId, debt);
+  data.financeDebts.push(created);
+  return created;
 }
 
-export function updateDebt(data, debtId, updates) {
+export async function updateDebt(data, debtId, updates) {
   const index = data.financeDebts.findIndex(d => d.id === debtId);
   if (index === -1) return null;
+  await updateDebtRow(debtId, updates);
   data.financeDebts[index] = { ...data.financeDebts[index], ...updates };
-  saveData(data);
   return data.financeDebts[index];
 }
 
-export function deleteDebt(data, debtId) {
+export async function deleteDebt(data, debtId) {
+  await deleteDebtRow(debtId);
   data.financeDebts = data.financeDebts.filter(d => d.id !== debtId);
-  saveData(data);
 }
 
-export function toggleDebtPaid(data, debtId) {
+export async function toggleDebtPaid(data, debtId) {
   const debt = data.financeDebts.find(d => d.id === debtId);
   if (!debt) return null;
   debt.paid = !debt.paid;
   debt.paidAt = debt.paid ? new Date().toISOString() : null;
-  saveData(data);
+  await updateDebtRow(debtId, { paid: debt.paid, paidAt: debt.paidAt });
   return debt;
 }
 
-export function addExpense(data, expense) {
-  data.financeExpenses.push(expense);
-  saveData(data);
-  return expense;
+export async function addExpense(data, expense) {
+  const created = await insertExpense(data.currentUserId, expense);
+  data.financeExpenses.push(created);
+  return created;
 }
 
-export function updateExpense(data, expenseId, updates) {
+export async function updateExpense(data, expenseId, updates) {
   const index = data.financeExpenses.findIndex(e => e.id === expenseId);
   if (index === -1) return null;
+  await updateExpenseRow(expenseId, updates);
   data.financeExpenses[index] = { ...data.financeExpenses[index], ...updates };
-  saveData(data);
   return data.financeExpenses[index];
 }
 
-export function deleteExpense(data, expenseId) {
+export async function deleteExpense(data, expenseId) {
+  await deleteExpenseRow(expenseId);
   data.financeExpenses = data.financeExpenses.filter(e => e.id !== expenseId);
-  saveData(data);
 }
 
-export function addGoal(data, goal) {
-  data.financeGoals.push(goal);
-  saveData(data);
-  return goal;
+export async function addGoal(data, goal) {
+  const created = await insertGoal(data.currentUserId, goal);
+  data.financeGoals.push(created);
+  return created;
 }
 
-export function updateGoal(data, goalId, updates) {
+export async function updateGoal(data, goalId, updates) {
   const index = data.financeGoals.findIndex(g => g.id === goalId);
   if (index === -1) return null;
+  await updateGoalRow(goalId, updates);
   data.financeGoals[index] = { ...data.financeGoals[index], ...updates };
-  saveData(data);
   return data.financeGoals[index];
 }
 
-export function deleteGoal(data, goalId) {
+export async function deleteGoal(data, goalId) {
+  await deleteGoalRow(goalId);
   data.financeGoals = data.financeGoals.filter(g => g.id !== goalId);
-  saveData(data);
 }

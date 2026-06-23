@@ -1,59 +1,45 @@
 /**
- * Camada de persistencia local.
- * Estrutura preparada para migracao futura ao Supabase.
+ * Camada de persistencia com Supabase.
  */
 
-import { calcHoursStudied } from './utils.js';
+import { supabase } from './supabase-client.js';
+import {
+  fetchUserData,
+  fetchRankingUsers,
+  syncProfileStats,
+  updateProfileName,
+  insertCourse,
+  updateCourseRow,
+  deleteCourseRow,
+  insertModule,
+  updateModuleRow,
+  deleteModuleRow,
+  insertLesson,
+  updateLessonRow,
+  deleteLessonRow,
+  insertActivity,
+  updateActivityRow,
+  deleteActivityRow,
+  recalculateAndGetStats
+} from './supabase-data.js';
 
-const STORAGE_KEY = 'studyflow_data';
-const SESSION_KEY = 'studyflow_session';
+let cachedData = defaultData();
 
-const defaultData = () => ({
-  currentUserId: null,
-  users: [],
-  courses: [],
-  modules: [],
-  lessons: [],
-  activities: []
-});
-
-const DEMO_USER_IDS = new Set(['user-1', 'user-2', 'user-3', 'user-4']);
-const DEMO_EMAIL = 'voce@studyflow.com';
-
-function removeDemoData(data) {
-  if (!Array.isArray(data.users)) {
-    data.users = [];
-    return;
-  }
-  const demoUserIds = new Set(
-    data.users
-      .filter(u => DEMO_USER_IDS.has(u.id) && (u.id !== 'user-1' || u.email?.toLowerCase() === DEMO_EMAIL))
-      .map(u => u.id)
-  );
-
-  if (demoUserIds.size === 0) return;
-
-  data.users = data.users.filter(u => !demoUserIds.has(u.id));
-  data.courses = data.courses.filter(c => !demoUserIds.has(c.userId));
-
-  const courseIds = new Set(data.courses.map(c => c.id));
-  data.modules = data.modules.filter(m => courseIds.has(m.courseId));
-
-  const moduleIds = new Set(data.modules.map(m => m.id));
-  data.lessons = data.lessons.filter(l => moduleIds.has(l.moduleId));
-  data.activities = data.activities.filter(a => courseIds.has(a.courseId));
-
-  if (data.financeSettings) data.financeSettings = data.financeSettings.filter(s => !demoUserIds.has(s.userId));
-  if (data.financeIncomes) data.financeIncomes = data.financeIncomes.filter(i => !demoUserIds.has(i.userId));
-  if (data.financeMonthlyBills) data.financeMonthlyBills = data.financeMonthlyBills.filter(b => !demoUserIds.has(b.userId));
-  if (data.financeDebts) data.financeDebts = data.financeDebts.filter(d => !demoUserIds.has(d.userId));
-  if (data.financeExpenses) data.financeExpenses = data.financeExpenses.filter(e => !demoUserIds.has(e.userId));
-  if (data.financeGoals) data.financeGoals = data.financeGoals.filter(g => !demoUserIds.has(g.userId));
-
-  if (data.currentUserId && demoUserIds.has(data.currentUserId)) {
-    data.currentUserId = null;
-    setSession({ isLoggedIn: false, userId: null });
-  }
+function defaultData() {
+  return {
+    currentUserId: null,
+    users: [],
+    courses: [],
+    modules: [],
+    lessons: [],
+    activities: [],
+    financeSettings: [],
+    financeIncomes: [],
+    financeMonthlyBills: [],
+    financeDebts: [],
+    financeExpenses: [],
+    financeGoals: []
+  };
 }
 
 function migrateFinanceData(data) {
@@ -66,76 +52,85 @@ function migrateFinanceData(data) {
   return data;
 }
 
-function migrateData(data) {
-  data.users?.forEach(u => {
-    if (u.isAccount === undefined) u.isAccount = true;
-    if (u.hoursStudied === undefined) u.hoursStudied = 0;
-    if (u.lessonsCompleted === undefined) u.lessonsCompleted = 0;
-  });
+export function loadData() {
+  return cachedData;
+}
 
-  removeDemoData(data);
-  migrateFinanceData(data);
-  recalculateAllUsersStats(data);
+export async function hydrateData(userId, email = '') {
+  cachedData = migrateFinanceData(await fetchUserData(userId, email));
+  return cachedData;
+}
 
-  return data;
+export async function refreshRanking() {
+  try {
+    cachedData.users = await fetchRankingUsers();
+    const user = getCurrentUser(cachedData);
+    if (user && !cachedData.users.some(u => u.id === user.id)) {
+      cachedData.users.push(user);
+    }
+  } catch {
+    // ranking opcional se a view ainda nao existir
+  }
 }
 
 export function generateId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  return crypto.randomUUID();
 }
 
-export function loadData() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      const data = migrateData(defaultData());
-      saveData(data);
-      return data;
-    }
-    const data = migrateData(JSON.parse(raw));
-    saveData(data);
-    return data;
-  } catch {
-    const data = migrateData(defaultData());
-    saveData(data);
-    return data;
-  }
+export function saveData(data) {
+  cachedData = data;
 }
 
 export function getSession() {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) return { isLoggedIn: false, userId: null };
-    return JSON.parse(raw);
-  } catch {
-    return { isLoggedIn: false, userId: null };
-  }
-}
-
-export function setSession(session) {
-  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  return { isLoggedIn: !!cachedData.currentUserId, userId: cachedData.currentUserId };
 }
 
 export function isLoggedIn() {
-  return getSession().isLoggedIn === true;
+  return !!cachedData.currentUserId;
 }
 
-export function loginUser(data, email, password) {
-  const user = data.users.find(
-    u => u.isAccount && u.email?.toLowerCase() === email.trim().toLowerCase()
-  );
+function mapAuthError(message) {
+  if (!message) return 'Nao foi possivel concluir a operacao.';
+  if (message.includes('Invalid login credentials')) return 'E-mail ou senha incorretos.';
+  if (message.includes('User already registered')) return 'Este e-mail ja esta em uso.';
+  if (message.includes('Email not confirmed')) {
+    return 'E-mail ainda nao confirmado. Desative "Confirm email" no Supabase ou use o link enviado ao seu e-mail.';
+  }
+  if (message.includes('Email logins are disabled')) {
+    return 'Login por e-mail desativado no Supabase. Ative em Authentication → Providers → Email.';
+  }
+  return message;
+}
 
-  if (!user || user.password !== password) {
-    return { success: false, error: 'E-mail ou senha incorretos.' };
+async function completeAuthAfterSignUp(email, password) {
+  const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+    email,
+    password
+  });
+
+  if (signInError) {
+    return { success: false, error: mapAuthError(signInError.message) };
   }
 
-  data.currentUserId = user.id;
-  saveData(data);
-  setSession({ isLoggedIn: true, userId: user.id });
-  return { success: true, user };
+  await hydrateData(signInData.user.id, signInData.user.email ?? email);
+  return { success: true, user: getCurrentUser(cachedData) };
 }
 
-export function registerUser(data, { name, email, password }) {
+export async function loginUser(email, password) {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: email.trim().toLowerCase(),
+    password
+  });
+
+  if (error) {
+    return { success: false, error: mapAuthError(error.message) };
+  }
+
+  await hydrateData(data.user.id, data.user.email ?? '');
+  return { success: true, user: getCurrentUser(cachedData) };
+}
+
+export async function registerUser({ name, email, password }) {
   const trimmedName = name.trim();
   const trimmedEmail = email.trim().toLowerCase();
 
@@ -151,51 +146,83 @@ export function registerUser(data, { name, email, password }) {
     return { success: false, error: 'A senha deve ter no minimo 6 caracteres.' };
   }
 
-  const emailTaken = data.users.some(
-    u => u.isAccount && u.email?.toLowerCase() === trimmedEmail
-  );
-
-  if (emailTaken) {
-    return { success: false, error: 'Este e-mail ja esta em uso.' };
-  }
-
-  const user = {
-    id: generateId(),
-    name: trimmedName,
+  const { data, error } = await supabase.auth.signUp({
     email: trimmedEmail,
     password,
-    isAccount: true,
-    lessonsCompleted: 0,
-    hoursStudied: 0
-  };
-
-  data.users.push(user);
-  data.currentUserId = user.id;
-  saveData(data);
-  setSession({ isLoggedIn: true, userId: user.id });
-  return { success: true, user };
-}
-
-export function logoutUser() {
-  setSession({ isLoggedIn: false, userId: null });
-}
-
-export function restoreSessionUser(data) {
-  const session = getSession();
-  if (session.isLoggedIn && session.userId) {
-    const user = data.users.find(u => u.id === session.userId && u.isAccount);
-    if (user) {
-      data.currentUserId = user.id;
-      saveData(data);
-      return true;
+    options: {
+      data: { name: trimmedName },
+      emailRedirectTo: `${window.location.origin}/`
     }
-    logoutUser();
+  });
+
+  if (error) {
+    return { success: false, error: mapAuthError(error.message) };
   }
-  return false;
+
+  if (data.session) {
+    await hydrateData(data.user.id, trimmedEmail);
+    return { success: true, user: getCurrentUser(cachedData) };
+  }
+
+  if (data.user) {
+    const result = await completeAuthAfterSignUp(trimmedEmail, password);
+    if (!result.success && result.error?.includes('nao confirmado')) {
+      return {
+        success: false,
+        error: 'Conta criada. No Supabase, desative "Confirm email" (Authentication → Providers → Email) e cadastre-se de novo, ou confirme o e-mail e faca login.'
+      };
+    }
+    return result;
+  }
+
+  return { success: false, error: 'Nao foi possivel concluir o cadastro.' };
 }
 
-export function saveData(data) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+export async function logoutUser() {
+  await supabase.auth.signOut();
+  cachedData = defaultData();
+}
+
+export async function restoreSessionUser() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user) return false;
+
+  await hydrateData(session.user.id, session.user.email ?? '');
+  return true;
+}
+
+/** Trata retorno do link de confirmacao de e-mail na URL (#error=... ou sessao). */
+export async function handleAuthRedirect() {
+  const hash = window.location.hash;
+  if (!hash || hash.length <= 1) {
+    return { status: 'none' };
+  }
+
+  const params = new URLSearchParams(hash.slice(1));
+  window.history.replaceState(null, '', window.location.pathname + window.location.search);
+
+  const errorDesc = params.get('error_description');
+  const errorCode = params.get('error_code');
+
+  if (errorDesc || params.get('error')) {
+    const raw = errorDesc || params.get('error');
+    const msg = decodeURIComponent(raw.replace(/\+/g, ' '));
+    if (errorCode === 'otp_expired' || /expired|invalid/i.test(msg)) {
+      return {
+        status: 'error',
+        message: 'Link de confirmacao expirado ou ja usado. Faca login com e-mail e senha, ou desative "Confirm email" no Supabase e cadastre-se de novo.'
+      };
+    }
+    return { status: 'error', message: msg };
+  }
+
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.user) {
+    await hydrateData(session.user.id, session.user.email ?? '');
+    return { status: 'session' };
+  }
+
+  return { status: 'none' };
 }
 
 export function getCurrentUser(data) {
@@ -246,122 +273,123 @@ export function getActivityById(data, activityId) {
   return data.activities.find(a => a.id === activityId);
 }
 
-export function addCourse(data, course) {
-  data.courses.push(course);
-  saveData(data);
-  return course;
+async function pushUserStats(data, userId) {
+  const stats = recalculateAndGetStats(data, userId);
+  const userIndex = data.users.findIndex(u => u.id === userId);
+  if (userIndex !== -1) {
+    data.users[userIndex].lessonsCompleted = stats.lessonsCompleted;
+    data.users[userIndex].hoursStudied = stats.hoursStudied;
+  }
+  await syncProfileStats(userId, stats.lessonsCompleted, stats.hoursStudied);
 }
 
-export function updateCourse(data, courseId, updates) {
+export async function addCourse(data, course) {
+  const created = await insertCourse(data.currentUserId, course);
+  data.courses.push(created);
+  await pushUserStats(data, data.currentUserId);
+  return created;
+}
+
+export async function updateCourse(data, courseId, updates) {
   const index = data.courses.findIndex(c => c.id === courseId);
   if (index === -1) return null;
+  await updateCourseRow(courseId, updates);
   data.courses[index] = { ...data.courses[index], ...updates };
-  saveData(data);
+  await pushUserStats(data, data.currentUserId);
   return data.courses[index];
 }
 
-export function deleteCourse(data, courseId) {
+export async function deleteCourse(data, courseId) {
   const moduleIds = data.modules.filter(m => m.courseId === courseId).map(m => m.id);
+  await deleteCourseRow(courseId);
   data.lessons = data.lessons.filter(l => !moduleIds.includes(l.moduleId));
   data.modules = data.modules.filter(m => m.courseId !== courseId);
   data.activities = data.activities.filter(a => a.courseId !== courseId);
   data.courses = data.courses.filter(c => c.id !== courseId);
-  recalculateUserLessons(data, data.currentUserId);
-  saveData(data);
+  await pushUserStats(data, data.currentUserId);
 }
 
-export function addModule(data, module) {
-  data.modules.push(module);
-  saveData(data);
-  return module;
+export async function addModule(data, module) {
+  const created = await insertModule(module.courseId, module);
+  data.modules.push(created);
+  return created;
 }
 
-export function updateModule(data, moduleId, updates) {
+export async function updateModule(data, moduleId, updates) {
   const index = data.modules.findIndex(m => m.id === moduleId);
   if (index === -1) return null;
+  await updateModuleRow(moduleId, updates);
   data.modules[index] = { ...data.modules[index], ...updates };
-  saveData(data);
   return data.modules[index];
 }
 
-export function deleteModule(data, moduleId) {
+export async function deleteModule(data, moduleId) {
+  await deleteModuleRow(moduleId);
   data.lessons = data.lessons.filter(l => l.moduleId !== moduleId);
   data.modules = data.modules.filter(m => m.id !== moduleId);
-  recalculateUserLessons(data, data.currentUserId);
-  saveData(data);
+  await pushUserStats(data, data.currentUserId);
 }
 
-export function addLesson(data, lesson) {
-  data.lessons.push(lesson);
-  saveData(data);
-  return lesson;
+export async function addLesson(data, lesson) {
+  const created = await insertLesson(lesson.moduleId, lesson);
+  data.lessons.push(created);
+  await pushUserStats(data, data.currentUserId);
+  return created;
 }
 
-export function updateLesson(data, lessonId, updates) {
+export async function updateLesson(data, lessonId, updates) {
   const index = data.lessons.findIndex(l => l.id === lessonId);
   if (index === -1) return null;
+  await updateLessonRow(lessonId, updates);
   data.lessons[index] = { ...data.lessons[index], ...updates };
-  recalculateUserLessons(data, data.currentUserId);
-  saveData(data);
+  await pushUserStats(data, data.currentUserId);
   return data.lessons[index];
 }
 
-export function deleteLesson(data, lessonId) {
+export async function deleteLesson(data, lessonId) {
+  await deleteLessonRow(lessonId);
   data.lessons = data.lessons.filter(l => l.id !== lessonId);
-  recalculateUserLessons(data, data.currentUserId);
-  saveData(data);
+  await pushUserStats(data, data.currentUserId);
 }
 
-export function addActivity(data, activity) {
-  data.activities.push(activity);
-  saveData(data);
-  return activity;
+export async function addActivity(data, activity) {
+  const created = await insertActivity(activity.courseId, activity);
+  data.activities.push(created);
+  return created;
 }
 
-export function updateActivity(data, activityId, updates) {
+export async function updateActivity(data, activityId, updates) {
   const index = data.activities.findIndex(a => a.id === activityId);
   if (index === -1) return null;
+  await updateActivityRow(activityId, updates);
   data.activities[index] = { ...data.activities[index], ...updates };
-  saveData(data);
   return data.activities[index];
 }
 
-export function deleteActivity(data, activityId) {
+export async function deleteActivity(data, activityId) {
+  await deleteActivityRow(activityId);
   data.activities = data.activities.filter(a => a.id !== activityId);
-  saveData(data);
 }
 
 export function recalculateUserStats(data, userId) {
+  const stats = recalculateAndGetStats(data, userId);
   const userIndex = data.users.findIndex(u => u.id === userId);
   if (userIndex === -1) return;
-
-  const userCourses = getCoursesByUser(data, userId);
-  let totalLessons = 0;
-
-  userCourses.forEach(course => {
-    const lessons = getLessonsByCourse(data, course.id);
-    totalLessons += lessons.filter(l => l.completed).length;
-  });
-
-  data.users[userIndex].lessonsCompleted = totalLessons;
-
-  if (userCourses.length > 0) {
-    data.users[userIndex].hoursStudied = calcHoursStudied(
-      userCourses,
-      courseId => getLessonsByCourse(data, courseId)
-    );
-  }
+  data.users[userIndex].lessonsCompleted = stats.lessonsCompleted;
+  data.users[userIndex].hoursStudied = stats.hoursStudied;
 }
 
 export function recalculateAllUsersStats(data) {
-  data.users.forEach(user => recalculateUserStats(data, user.id));
+  if (data.currentUserId) {
+    recalculateUserStats(data, data.currentUserId);
+  }
 }
 
 export function recalculateUserLessons(data, userId) {
   recalculateUserStats(data, userId);
 }
 
-export function toggleLesson(data, lessonId) {
+export async function toggleLesson(data, lessonId) {
   const lesson = getLessonById(data, lessonId);
   if (!lesson) return null;
 
@@ -372,7 +400,7 @@ export function toggleLesson(data, lessonId) {
   });
 }
 
-export function toggleActivity(data, activityId) {
+export async function toggleActivity(data, activityId) {
   const activity = getActivityById(data, activityId);
   if (!activity) return null;
 
@@ -381,39 +409,50 @@ export function toggleActivity(data, activityId) {
   });
 }
 
-export function updateUserName(data, userId, name) {
+export async function updateUserName(data, userId, name) {
+  await updateProfileName(userId, name);
   const index = data.users.findIndex(u => u.id === userId);
   if (index === -1) return null;
   data.users[index].name = name;
-  saveData(data);
   return data.users[index];
 }
 
-export function updateUserProfile(data, userId, { name, email }) {
+export async function updateUserProfile(data, userId, { name, email }) {
+  const trimmedEmail = email.trim().toLowerCase();
   const index = data.users.findIndex(u => u.id === userId);
   if (index === -1) return { success: false, error: 'Usuario nao encontrado.' };
 
-  const trimmedEmail = email.trim().toLowerCase();
-  const emailTaken = data.users.some(
-    u => u.id !== userId && u.isAccount && u.email?.toLowerCase() === trimmedEmail
-  );
+  const { error: profileError } = await supabase
+    .from('profiles')
+    .update({ name: name.trim(), updated_at: new Date().toISOString() })
+    .eq('id', userId);
 
-  if (emailTaken) {
-    return { success: false, error: 'Este e-mail ja esta em uso.' };
+  if (profileError) {
+    return { success: false, error: profileError.message };
+  }
+
+  const { error: emailError } = await supabase.auth.updateUser({ email: trimmedEmail });
+  if (emailError) {
+    return { success: false, error: mapAuthError(emailError.message) };
   }
 
   data.users[index].name = name.trim();
   data.users[index].email = trimmedEmail;
-  saveData(data);
   return { success: true, user: data.users[index] };
 }
 
-export function changeUserPassword(data, userId, currentPassword, newPassword) {
-  const index = data.users.findIndex(u => u.id === userId);
-  if (index === -1) return { success: false, error: 'Usuario nao encontrado.' };
+export async function changeUserPassword(data, userId, currentPassword, newPassword) {
+  const user = getCurrentUser(data);
+  if (!user?.email) {
+    return { success: false, error: 'Usuario nao encontrado.' };
+  }
 
-  const user = data.users[index];
-  if (user.password !== currentPassword) {
+  const { error: signInError } = await supabase.auth.signInWithPassword({
+    email: user.email,
+    password: currentPassword
+  });
+
+  if (signInError) {
     return { success: false, error: 'Senha atual incorreta.' };
   }
 
@@ -421,8 +460,11 @@ export function changeUserPassword(data, userId, currentPassword, newPassword) {
     return { success: false, error: 'A nova senha deve ter no minimo 6 caracteres.' };
   }
 
-  data.users[index].password = newPassword;
-  saveData(data);
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) {
+    return { success: false, error: mapAuthError(error.message) };
+  }
+
   return { success: true };
 }
 

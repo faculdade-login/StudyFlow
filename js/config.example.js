@@ -6,5 +6,6 @@
  */
 export const config = {
   supabaseUrl: 'https://SEU_PROJECT_ID.supabase.co',
-  supabaseAnonKey: 'sua_chave_anon_publica'
+  supabaseAnonKey: 'sua_chave_anon_publica',
+  useSupabase: false
 };

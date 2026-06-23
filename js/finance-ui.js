@@ -2,7 +2,6 @@
  * Interface do modulo financeiro.
  */
 
-import { generateId } from './storage.js';
 import {
   getFinanceSettings,
   updateFinanceSettings,
@@ -545,23 +544,23 @@ export function goalForm(goal = null) {
 
 /* ---- Handlers de persistencia ---- */
 
-export function handleSaveSalary(data, userId) {
+export async function handleSaveSalary(data, userId) {
   const form = document.getElementById('modal-form');
   if (!form.reportValidity()) return false;
   const monthlySalary = parseFloat(form.querySelector('[name="monthlySalary"]').value) || 0;
-  updateFinanceSettings(data, userId, { monthlySalary });
+  await updateFinanceSettings(data, userId, { monthlySalary });
   return true;
 }
 
-export function handleSaveSavings(data, userId) {
+export async function handleSaveSavings(data, userId) {
   const form = document.getElementById('modal-form');
   if (!form.reportValidity()) return false;
   const currentSavings = parseFloat(form.querySelector('[name="currentSavings"]').value) || 0;
-  updateFinanceSettings(data, userId, { currentSavings });
+  await updateFinanceSettings(data, userId, { currentSavings });
   return true;
 }
 
-export function handleSaveMonthlyBill(data, userId, billId = null) {
+export async function handleSaveMonthlyBill(data, userId, billId = null) {
   const form = document.getElementById('modal-form');
   if (!form.reportValidity()) return false;
 
@@ -573,20 +572,14 @@ export function handleSaveMonthlyBill(data, userId, billId = null) {
   };
 
   if (billId) {
-    updateMonthlyBill(data, billId, payload);
+    await updateMonthlyBill(data, billId, payload);
   } else {
-    addMonthlyBill(data, {
-      id: generateId(),
-      userId,
-      ...payload,
-      paid: false,
-      paidMonth: null
-    });
+    await addMonthlyBill(data, { userId, ...payload, paid: false, paidMonth: null });
   }
   return true;
 }
 
-export function handleSaveDebt(data, userId, debtId = null) {
+export async function handleSaveDebt(data, userId, debtId = null) {
   const form = document.getElementById('modal-form');
   if (!form.reportValidity()) return false;
 
@@ -598,20 +591,14 @@ export function handleSaveDebt(data, userId, debtId = null) {
   };
 
   if (debtId) {
-    updateDebt(data, debtId, payload);
+    await updateDebt(data, debtId, payload);
   } else {
-    addDebt(data, {
-      id: generateId(),
-      userId,
-      ...payload,
-      paid: false,
-      paidAt: null
-    });
+    await addDebt(data, { userId, ...payload, paid: false, paidAt: null });
   }
   return true;
 }
 
-export function handleSaveIncome(data, userId, incomeId = null) {
+export async function handleSaveIncome(data, userId, incomeId = null) {
   const form = document.getElementById('modal-form');
   if (!form.reportValidity()) return false;
 
@@ -622,14 +609,14 @@ export function handleSaveIncome(data, userId, incomeId = null) {
   };
 
   if (incomeId) {
-    updateIncome(data, incomeId, payload);
+    await updateIncome(data, incomeId, payload);
   } else {
-    addIncome(data, { id: generateId(), userId, ...payload });
+    await addIncome(data, { userId, ...payload });
   }
   return true;
 }
 
-export function handleSaveExpense(data, userId, expenseId = null) {
+export async function handleSaveExpense(data, userId, expenseId = null) {
   const form = document.getElementById('modal-form');
   if (!form.reportValidity()) return false;
 
@@ -641,14 +628,14 @@ export function handleSaveExpense(data, userId, expenseId = null) {
   };
 
   if (expenseId) {
-    updateExpense(data, expenseId, payload);
+    await updateExpense(data, expenseId, payload);
   } else {
-    addExpense(data, { id: generateId(), userId, ...payload });
+    await addExpense(data, { userId, ...payload });
   }
   return true;
 }
 
-export function handleSaveGoal(data, userId, goalId = null) {
+export async function handleSaveGoal(data, userId, goalId = null) {
   const form = document.getElementById('modal-form');
   if (!form.reportValidity()) return false;
 
@@ -659,14 +646,9 @@ export function handleSaveGoal(data, userId, goalId = null) {
   };
 
   if (goalId) {
-    updateGoal(data, goalId, payload);
+    await updateGoal(data, goalId, payload);
   } else {
-    addGoal(data, {
-      id: generateId(),
-      userId,
-      ...payload,
-      createdAt: new Date().toISOString()
-    });
+    await addGoal(data, { userId, ...payload, createdAt: new Date().toISOString() });
   }
   return true;
 }

@@ -4,6 +4,9 @@
   "private": true,
   "description": "StudyFlow - gerenciamento de estudos e finanças",
   "scripts": {
-    "dev": "npx serve ."
+    "dev": "npx serve . -l 3000"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.108.2"
   }
 }
