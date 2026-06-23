@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "name": "studyflow",
+  "buildCommand": null,
+  "outputDirectory": ".",
+  "cleanUrls": true,
+  "trailingSlash": false
+}

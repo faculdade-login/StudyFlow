@@ -1,0 +1,9 @@
+{
+  "name": "studyflow",
+  "version": "1.0.0",
+  "private": true,
+  "description": "StudyFlow - gerenciamento de estudos e finanças",
+  "scripts": {
+    "dev": "npx serve ."
+  }
+}
