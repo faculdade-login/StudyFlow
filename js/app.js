@@ -133,9 +133,28 @@ function isCourseFullyComplete(course) {
   return isCourseComplete(lessons, modules);
 }
 
-function getVisibleCourses(courses) {
-  if (showCompletedCourses) return courses;
+function getActiveCourses(courses) {
   return courses.filter(course => !isCourseFullyComplete(course));
+}
+
+function getCompletedCoursesList(courses) {
+  return courses.filter(course => isCourseFullyComplete(course));
+}
+
+function sortCoursesByRecent(courses) {
+  return [...courses].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+function renderDashboardScrollPanel(courses, emptyMessage) {
+  if (courses.length === 0) {
+    return `<div class="empty-state dashboard-scroll-empty"><p>${emptyMessage}</p></div>`;
+  }
+
+  return `
+    <div class="dashboard-scroll-panel">
+      ${renderCourseCards(courses)}
+    </div>
+  `;
 }
 
 function getCurrentAppState() {
@@ -241,8 +260,9 @@ function renderNextCoursesList(userId) {
   }
 
   return `
-    <div class="next-courses-list">
-      ${queued.map((course, index) => {
+    <div class="dashboard-scroll-panel">
+      <div class="next-courses-list">
+        ${queued.map((course, index) => {
         const modules = getModulesByCourse(data, course.id);
         const lessons = getLessonsByCourse(data, course.id);
         const { percent } = calcCourseProgress(lessons);
@@ -275,6 +295,7 @@ function renderNextCoursesList(userId) {
           </div>
         `;
       }).join('')}
+      </div>
     </div>
   `;
 }
@@ -441,8 +462,8 @@ function renderDashboard() {
 
   const ranking = getRanking(data);
   const userPosition = ranking.findIndex(u => u.id === user.id) + 1;
-  const visibleCourses = getVisibleCourses(courses);
-  const hiddenCompletedCount = courses.length - visibleCourses.length;
+  const activeCourses = sortCoursesByRecent(getActiveCourses(courses));
+  const completedCourses = sortCoursesByRecent(getCompletedCoursesList(courses));
 
   content.innerHTML = `
     <div class="stats-grid">
@@ -472,12 +493,12 @@ function renderDashboard() {
       </div>
     </div>
 
-    <div class="card" style="margin-bottom: 2rem;">
+    <div class="card " style="margin-bottom: 2rem;">
       <div class="card-header">
         <span class="card-title">Proximos Cursos</span>
         <button type="button" class="btn btn-primary btn-sm" data-action="new-course">Novo Curso</button>
       </div>
-      <div class="card-body">
+      <div class="card-body card-body-scroll">
         ${renderNextCoursesList(user.id)}
       </div>
     </div>
@@ -485,12 +506,9 @@ function renderDashboard() {
     <div class="card" style="margin-bottom: 2rem;">
       <div class="card-header">
         <span class="card-title">Cursos Recentes</span>
-        <div class="card-header-actions">
-          ${renderCompletedCoursesToggle(hiddenCompletedCount)}
-          <button type="button" class="btn btn-primary btn-sm" data-action="new-course">Novo Curso</button>
-        </div>
+        <button type="button" class="btn btn-primary btn-sm" data-action="new-course">Novo Curso</button>
       </div>
-      <div class="card-body">
+      <div class="card-body card-body-scroll">
         ${courses.length === 0 ? `
           <div class="empty-state">
             <div class="empty-state-icon">
@@ -502,15 +520,17 @@ function renderDashboard() {
               <button type="button" class="btn btn-primary" data-action="new-course">Cadastrar Curso</button>
             </div>
           </div>
-        ` : visibleCourses.length === 0 ? `
-          <div class="empty-state">
-            <h3>Todos os cursos estao concluidos</h3>
-            <p>Voce pode exibir os cursos concluidos quando quiser revisar.</p>
-            <div class="empty-state-actions">
-              ${renderCompletedCoursesToggle(hiddenCompletedCount)}
-            </div>
-          </div>
-        ` : renderCourseCards(visibleCourses.slice(0, 5))}
+        ` : renderDashboardScrollPanel(activeCourses, 'Nenhum curso em andamento no momento.')}
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 2rem;">
+      <div class="card-header">
+        <span class="card-title">Cursos Concluidos</span>
+        <span class="card-subtitle">${completedCourses.length} curso${completedCourses.length !== 1 ? 's' : ''}</span>
+      </div>
+      <div class="card-body card-body-scroll">
+        ${renderDashboardScrollPanel(completedCourses, 'Nenhum curso concluido ainda.')}
       </div>
     </div>
 
@@ -530,8 +550,8 @@ function renderCourses() {
   pageTitle.textContent = 'Cursos';
   const user = getCurrentUser(data);
   const courses = getCoursesByUser(data, user.id);
-  const visibleCourses = getVisibleCourses(courses);
-  const hiddenCompletedCount = courses.length - visibleCourses.length;
+  const activeCourses = getActiveCourses(courses);
+  const hiddenCompletedCount = courses.length - activeCourses.length;
 
   content.innerHTML = `
     <div class="section-header">
@@ -555,7 +575,7 @@ function renderCourses() {
           <button type="button" class="btn btn-primary" data-action="new-course">Cadastrar Curso</button>
         </div>
       </div>
-    ` : visibleCourses.length === 0 ? `
+    ` : activeCourses.length === 0 ? `
       <div class="empty-state">
         <h3>Todos os cursos estao concluidos</h3>
         <p>Os cursos concluidos ficam ocultos por padrao. Clique abaixo para exibi-los.</p>
@@ -563,7 +583,7 @@ function renderCourses() {
           ${renderCompletedCoursesToggle(hiddenCompletedCount)}
         </div>
       </div>
-    ` : `<div class="course-grid">${renderCourseCards(visibleCourses)}</div>`}
+    ` : `<div class="course-grid">${renderCourseCards(showCompletedCourses ? courses : activeCourses)}</div>`}
   `;
 }
 
@@ -1054,7 +1074,6 @@ function courseForm(course = null) {
         <div class="form-group">
           <label>Carga Horaria (horas)</label>
           <input type="number" class="form-input" name="workloadHours" min="0" step="0.5" value="${course ? course.workloadHours || '' : ''}" placeholder="Ex: 74">
-          <p class="form-hint">Usada para estimar horas estudadas: divide-se igualmente entre as aulas dos modulos.</p>
         </div>
       </div>
       <div class="form-group">

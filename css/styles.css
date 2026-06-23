@@ -567,6 +567,59 @@ h1, h2, h3,
   color: var(--text-primary);
 }
 
+.card-subtitle {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.card-body-scroll {
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+}
+
+.dashboard-scroll-panel {
+  max-height: 400px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--duo-blue) var(--duo-gray-light);
+}
+
+.dashboard-scroll-panel::-webkit-scrollbar {
+  width: 8px;
+}
+
+.dashboard-scroll-panel::-webkit-scrollbar-track {
+  background: var(--duo-gray-light);
+  border-radius: 999px;
+}
+
+.dashboard-scroll-panel::-webkit-scrollbar-thumb {
+  background: var(--duo-blue);
+  border-radius: 999px;
+}
+
+.dashboard-scroll-panel .course-card {
+  margin-bottom: 0.875rem;
+}
+
+.dashboard-scroll-panel .course-card:last-child {
+  margin-bottom: 0;
+}
+
+.dashboard-scroll-empty {
+  padding: 0.5rem 0;
+}
+
+.dashboard-scroll-empty p {
+  margin: 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
 .card-body {
   padding: 1.25rem;
 }
