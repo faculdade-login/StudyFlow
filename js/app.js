@@ -39,6 +39,7 @@ import {
   recalculateUserLessons,
   recalculateAllUsersStats,
   registerSyncLifecycle,
+  isLoggedIn,
 } from './storage.js';
 
 import {
@@ -96,6 +97,9 @@ let selectedTab = 'modules';
 let selectedFinanceTab = 'overview';
 let financeTabsScrollLeft = 0;
 let confirmResolver = null;
+let showCompletedCourses = localStorage.getItem('studyflow-show-completed') === 'true';
+let isPopStateNavigation = false;
+let lastHistoryKey = '';
 
 const content = document.getElementById('content');
 const pageTitle = document.getElementById('page-title');
@@ -115,6 +119,108 @@ const topbarProfile = document.getElementById('topbar-profile');
 
 function scrollToTop() {
   window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+}
+
+function isCourseFullyComplete(course) {
+  const modules = getModulesByCourse(data, course.id);
+  const lessons = getLessonsByCourse(data, course.id);
+  return isCourseComplete(lessons, modules);
+}
+
+function getVisibleCourses(courses) {
+  if (showCompletedCourses) return courses;
+  return courses.filter(course => !isCourseFullyComplete(course));
+}
+
+function getCurrentAppState() {
+  return {
+    view: currentView,
+    courseId: selectedCourseId,
+    tab: selectedTab,
+    financeTab: selectedFinanceTab
+  };
+}
+
+function getAppStateFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const courseId = params.get('course');
+
+  if (courseId) {
+    return {
+      view: 'course-detail',
+      courseId,
+      tab: params.get('tab') || 'modules',
+      financeTab: 'overview'
+    };
+  }
+
+  return {
+    view: params.get('view') || 'dashboard',
+    courseId: null,
+    tab: 'modules',
+    financeTab: params.get('finance') || 'overview'
+  };
+}
+
+function buildAppUrl(state) {
+  const params = new URLSearchParams();
+
+  if (state.courseId) {
+    params.set('course', state.courseId);
+    if (state.tab && state.tab !== 'modules') params.set('tab', state.tab);
+  } else if (state.view && state.view !== 'dashboard') {
+    params.set('view', state.view);
+    if (state.view === 'finance' && state.financeTab && state.financeTab !== 'overview') {
+      params.set('finance', state.financeTab);
+    }
+  }
+
+  const qs = params.toString();
+  return `${window.location.pathname}${qs ? `?${qs}` : ''}`;
+}
+
+function applyAppState(state) {
+  currentView = state.view || 'dashboard';
+  selectedCourseId = state.courseId || null;
+  selectedTab = state.tab || 'modules';
+  selectedFinanceTab = state.financeTab || 'overview';
+
+  if (currentView === 'course-detail') {
+    if (!selectedCourseId || !getCourseById(data, selectedCourseId)) {
+      currentView = 'courses';
+      selectedCourseId = null;
+    }
+  }
+
+  setActiveNav(currentView === 'course-detail' ? 'courses' : currentView);
+  render();
+}
+
+function syncAppUrl(replace = false) {
+  if (isPopStateNavigation || appEl.hidden) return;
+
+  const state = getCurrentAppState();
+  const key = JSON.stringify(state);
+  if (!replace && key === lastHistoryKey) return;
+
+  lastHistoryKey = key;
+  const url = buildAppUrl(state);
+
+  if (replace) {
+    history.replaceState(state, '', url);
+  } else {
+    history.pushState(state, '', url);
+  }
+}
+
+function renderCompletedCoursesToggle(hiddenCount) {
+  if (hiddenCount === 0 && !showCompletedCourses) return '';
+
+  return `
+    <button type="button" class="btn btn-ghost btn-sm" data-action="toggle-completed-courses">
+      ${showCompletedCourses ? 'Ocultar concluidos' : `Ver concluidos (${hiddenCount})`}
+    </button>
+  `;
 }
 
 async function refresh() {
@@ -270,6 +376,8 @@ function renderDashboard() {
 
   const ranking = getRanking(data);
   const userPosition = ranking.findIndex(u => u.id === user.id) + 1;
+  const visibleCourses = getVisibleCourses(courses);
+  const hiddenCompletedCount = courses.length - visibleCourses.length;
 
   content.innerHTML = `
     <div class="stats-grid">
@@ -302,7 +410,10 @@ function renderDashboard() {
     <div class="card" style="margin-bottom: 2rem;">
       <div class="card-header">
         <span class="card-title">Cursos Recentes</span>
-        <button class="btn btn-primary btn-sm" data-action="new-course">Novo Curso</button>
+        <div class="card-header-actions">
+          ${renderCompletedCoursesToggle(hiddenCompletedCount)}
+          <button type="button" class="btn btn-primary btn-sm" data-action="new-course">Novo Curso</button>
+        </div>
       </div>
       <div class="card-body">
         ${courses.length === 0 ? `
@@ -313,10 +424,18 @@ function renderDashboard() {
             <h3>Nenhum curso cadastrado</h3>
             <p>Comece adicionando seu primeiro curso de estudos.</p>
             <div class="empty-state-actions">
-              <button class="btn btn-primary" data-action="new-course">Cadastrar Curso</button>
+              <button type="button" class="btn btn-primary" data-action="new-course">Cadastrar Curso</button>
             </div>
           </div>
-        ` : renderCourseCards(courses.slice(0, 5))}
+        ` : visibleCourses.length === 0 ? `
+          <div class="empty-state">
+            <h3>Todos os cursos estao concluidos</h3>
+            <p>Voce pode exibir os cursos concluidos quando quiser revisar.</p>
+            <div class="empty-state-actions">
+              ${renderCompletedCoursesToggle(hiddenCompletedCount)}
+            </div>
+          </div>
+        ` : renderCourseCards(visibleCourses.slice(0, 5))}
       </div>
     </div>
 
@@ -336,14 +455,19 @@ function renderCourses() {
   pageTitle.textContent = 'Cursos';
   const user = getCurrentUser(data);
   const courses = getCoursesByUser(data, user.id);
+  const visibleCourses = getVisibleCourses(courses);
+  const hiddenCompletedCount = courses.length - visibleCourses.length;
 
   content.innerHTML = `
     <div class="section-header">
       <h2>Meus Cursos</h2>
-      <button class="btn btn-primary" data-action="new-course">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Novo Curso
-      </button>
+      <div class="section-header-actions">
+        ${renderCompletedCoursesToggle(hiddenCompletedCount)}
+        <button type="button" class="btn btn-primary" data-action="new-course">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Novo Curso
+        </button>
+      </div>
     </div>
     ${courses.length === 0 ? `
       <div class="empty-state">
@@ -353,10 +477,18 @@ function renderCourses() {
         <h3>Nenhum curso cadastrado</h3>
         <p>Cadastre cursos, modulos e aulas para acompanhar seu progresso.</p>
         <div class="empty-state-actions">
-          <button class="btn btn-primary" data-action="new-course">Cadastrar Curso</button>
+          <button type="button" class="btn btn-primary" data-action="new-course">Cadastrar Curso</button>
         </div>
       </div>
-    ` : `<div class="course-grid">${renderCourseCards(courses)}</div>`}
+    ` : visibleCourses.length === 0 ? `
+      <div class="empty-state">
+        <h3>Todos os cursos estao concluidos</h3>
+        <p>Os cursos concluidos ficam ocultos por padrao. Clique abaixo para exibi-los.</p>
+        <div class="empty-state-actions">
+          ${renderCompletedCoursesToggle(hiddenCompletedCount)}
+        </div>
+      </div>
+    ` : `<div class="course-grid">${renderCourseCards(visibleCourses)}</div>`}
   `;
 }
 
@@ -369,7 +501,7 @@ function renderCourseCards(courses) {
     const complete = isCourseComplete(lessons, modules);
 
     return `
-      <div class="course-card" data-action="open-course" data-course-id="${course.id}">
+      <div class="course-card ${complete ? 'course-card-completed' : ''}" data-action="open-course" data-course-id="${course.id}">
         <div class="course-card-header">
           <span class="course-name">${escapeHtml(course.name)}</span>
           ${course.platform ? `<span class="course-platform">${escapeHtml(course.platform)}</span>` : ''}
@@ -729,6 +861,33 @@ function openRankingUserCoursesModal(userId) {
   );
 }
 
+function bindModalForms() {
+  modalBody.querySelectorAll('form').forEach(form => {
+    if (form.dataset.submitBound) return;
+    form.dataset.submitBound = '1';
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+
+      if (form.id === 'profile-form') {
+        modalFooter.querySelector('[data-action="save-profile"]')?.click();
+        return;
+      }
+
+      if (form.id === 'password-form') {
+        modalFooter.querySelector('[data-action="save-password"]')?.click();
+        return;
+      }
+
+      modalFooter.querySelector('[data-action^="save-"]')?.click();
+    });
+  });
+
+  modalFooter.querySelectorAll('button:not([type])').forEach(btn => {
+    btn.type = 'button';
+  });
+}
+
 function showModal(title, bodyHtml, footerHtml, options = {}) {
   modalTitle.textContent = title;
   modalBody.innerHTML = bodyHtml;
@@ -737,6 +896,7 @@ function showModal(title, bodyHtml, footerHtml, options = {}) {
   modal.classList.toggle('modal-profile', !!options.profile);
   modal.classList.toggle('modal-confirm', !!options.confirm);
   modalOverlay.hidden = false;
+  bindModalForms();
 }
 
 function closeModal() {
@@ -1060,13 +1220,22 @@ function showAuthMode(mode = 'login') {
 function showAuthScreen(show) {
   authScreen.hidden = !show;
   appEl.hidden = show;
+
   if (show) {
+    authScreen.removeAttribute('inert');
+    appEl.setAttribute('inert', '');
     showAuthMode('login');
+    history.replaceState(null, '', window.location.pathname);
+    lastHistoryKey = '';
+  } else {
+    authScreen.setAttribute('inert', '');
+    appEl.removeAttribute('inert');
   }
 }
 
 async function handleLogin(e) {
   e.preventDefault();
+  if (authScreen.hidden) return;
   const form = e.target;
   const formData = new FormData(form);
 
@@ -1093,6 +1262,7 @@ async function handleLogin(e) {
 
 async function handleRegister(e) {
   e.preventDefault();
+  if (authScreen.hidden) return;
   const form = e.target;
   const formData = new FormData(form);
   const password = formData.get('password');
@@ -1322,11 +1492,13 @@ async function handleContentClick(e) {
       selectedTab = 'modules';
       currentView = 'course-detail';
       render();
+      syncAppUrl();
       break;
     case 'back-courses':
       currentView = 'courses';
       selectedCourseId = null;
       render();
+      syncAppUrl();
       break;
     case 'edit-course':
       openEditCourseModal(target.dataset.courseId);
@@ -1343,6 +1515,7 @@ async function handleContentClick(e) {
           selectedCourseId = null;
           showToast('Curso excluido');
           await refresh();
+          syncAppUrl(true);
         });
       }
       break;
@@ -1350,6 +1523,7 @@ async function handleContentClick(e) {
     case 'switch-tab':
       selectedTab = target.dataset.tab;
       render();
+      syncAppUrl(true);
       break;
     case 'new-module':
       openNewModuleModal(target.dataset.courseId);
@@ -1425,6 +1599,12 @@ async function handleContentClick(e) {
       setActiveNav('ranking');
       await refreshRanking();
       render();
+      syncAppUrl();
+      break;
+    case 'toggle-completed-courses':
+      showCompletedCourses = !showCompletedCourses;
+      localStorage.setItem('studyflow-show-completed', showCompletedCourses ? 'true' : 'false');
+      render();
       break;
     case 'show-ranking-user':
       openRankingUserCoursesModal(target.dataset.userId);
@@ -1434,10 +1614,12 @@ async function handleContentClick(e) {
       currentView = 'courses';
       setActiveNav('courses');
       render();
+      syncAppUrl();
       break;
     case 'finance-tab':
       selectedFinanceTab = target.dataset.tab;
       render();
+      syncAppUrl(true);
       break;
     case 'edit-salary':
       openSalaryModal();
@@ -1661,6 +1843,7 @@ async function handleNavClick(e) {
   }
 
   render();
+  syncAppUrl();
 }
 
 function setupEventListeners() {
@@ -1715,14 +1898,49 @@ function setupEventListeners() {
       }
     }
   });
+
+  window.addEventListener('popstate', (e) => {
+    if (!isLoggedIn() || appEl.hidden) return;
+
+    isPopStateNavigation = true;
+    const state = e.state || getAppStateFromUrl();
+    lastHistoryKey = JSON.stringify(state);
+    applyAppState(state);
+    isPopStateNavigation = false;
+  });
+
+  document.addEventListener('submit', (e) => {
+    if (appEl.hidden) return;
+
+    const form = e.target;
+    if (form?.id === 'login-form' || form?.id === 'register-form') {
+      e.preventDefault();
+    }
+  }, true);
 }
 
 async function bootstrapApp() {
+  const urlState = getAppStateFromUrl();
+  currentView = urlState.view;
+  selectedCourseId = urlState.courseId;
+  selectedTab = urlState.tab;
+  selectedFinanceTab = urlState.financeTab;
+
+  if (currentView === 'course-detail' && (!selectedCourseId || !getCourseById(data, selectedCourseId))) {
+    currentView = 'courses';
+    selectedCourseId = null;
+  }
+
   recalculateAllUsersStats(data);
   await refreshRanking({ force: true });
+  setActiveNav(currentView === 'course-detail' ? 'courses' : currentView);
   renderUserInfo();
   renderTopbarStats();
   render();
+
+  const state = getCurrentAppState();
+  lastHistoryKey = JSON.stringify(state);
+  history.replaceState(state, '', buildAppUrl(state));
 }
 
 async function init() {

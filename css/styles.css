@@ -1580,6 +1580,19 @@ h1, h2, h3,
   font-weight: 900;
 }
 
+.section-header-actions,
+.card-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.course-card-completed {
+  opacity: 0.82;
+  border-color: var(--duo-green);
+}
+
 .section-subtitle {
   color: var(--text-secondary);
   font-weight: 600;
@@ -1754,7 +1767,11 @@ h1, h2, h3,
   align-items: center;
   justify-content: center;
   padding: 1.5rem;
-  background: var(--bg-primary);
+  background-color: var(--bg-primary);
+  background-image: url('../imagem/backgroud.webp');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 .auth-screen[hidden] {
@@ -1768,6 +1785,7 @@ h1, h2, h3,
   border: 2px solid var(--duo-gray);
   border-radius: var(--radius-xl);
   padding: 2rem 1.75rem;
+  box-shadow: var(--shadow);
 }
 
 .auth-logo {
@@ -1855,6 +1873,27 @@ h1, h2, h3,
 
 .auth-switch-btn:hover {
   color: var(--duo-blue-dark);
+}
+
+@media (max-width: 768px) {
+  .auth-screen {
+    align-items: flex-start;
+    padding-top: 6rem;
+    padding-bottom: 1rem;
+  }
+
+  .auth-card {
+    margin-top: 0;
+    padding: 1.5rem 1.25rem;
+  }
+
+  .auth-logo {
+    margin-bottom: 1rem;
+  }
+
+  .auth-logo .logo-img-full {
+    height: 2.25rem;
+  }
 }
 
 .app[hidden] {
