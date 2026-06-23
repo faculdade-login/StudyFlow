@@ -40,6 +40,10 @@ import {
   recalculateAllUsersStats,
   registerSyncLifecycle,
   isLoggedIn,
+  getQueuedCourses,
+  reorderCourseQueue,
+  removeCourseFromQueue,
+  getNextQueueOrder,
 } from './storage.js';
 
 import {
@@ -56,7 +60,9 @@ import {
   formatHours,
   formatOrdinal,
   calcCourseEstimatedHours,
-  renderProgressBar
+  renderProgressBar,
+  COURSE_CATEGORIES,
+  renderCategoryBadge,
 } from './utils.js';
 
 import {
@@ -220,6 +226,65 @@ function renderCompletedCoursesToggle(hiddenCount) {
     <button type="button" class="btn btn-ghost btn-sm" data-action="toggle-completed-courses">
       ${showCompletedCourses ? 'Ocultar concluidos' : `Ver concluidos (${hiddenCount})`}
     </button>
+  `;
+}
+
+function renderNextCoursesList(userId) {
+  const queued = getQueuedCourses(data, userId);
+
+  if (queued.length === 0) {
+    return `
+      <div class="empty-state next-courses-empty">
+        <p>Nenhum curso na fila. Novos cursos entram automaticamente nos proximos.</p>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="next-courses-list">
+      ${queued.map((course, index) => {
+        const modules = getModulesByCourse(data, course.id);
+        const lessons = getLessonsByCourse(data, course.id);
+        const { percent } = calcCourseProgress(lessons);
+
+        return `
+          <div class="next-course-item">
+            <span class="next-course-order">${index + 1}</span>
+            <button type="button" class="next-course-body" data-action="open-course" data-course-id="${course.id}">
+              <div class="next-course-top">
+                <span class="next-course-name">${escapeHtml(course.name)}</span>
+                ${course.category ? renderCategoryBadge(course.category) : ''}
+              </div>
+              <div class="next-course-meta">
+                <span>${percent}% concluido</span>
+                ${course.platform ? `<span>${escapeHtml(course.platform)}</span>` : ''}
+              </div>
+              ${renderProgressBar(course.name, percent, { showLabel: false })}
+            </button>
+            <div class="next-course-actions">
+              <button type="button" class="finance-action-btn finance-action-edit" data-action="queue-move-up" data-course-id="${course.id}" title="Subir" ${index === 0 ? 'disabled' : ''}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+              </button>
+              <button type="button" class="finance-action-btn finance-action-edit" data-action="queue-move-down" data-course-id="${course.id}" title="Descer" ${index === queued.length - 1 ? 'disabled' : ''}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <button type="button" class="finance-action-btn finance-action-delete" data-action="queue-remove" data-course-id="${course.id}" title="Remover da fila">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderCategoryOptions(selected = '') {
+  return `
+    <option value="">Selecione uma categoria</option>
+    ${COURSE_CATEGORIES.map(category => `
+      <option value="${escapeHtml(category)}" ${selected === category ? 'selected' : ''}>${escapeHtml(category)}</option>
+    `).join('')}
   `;
 }
 
@@ -409,6 +474,16 @@ function renderDashboard() {
 
     <div class="card" style="margin-bottom: 2rem;">
       <div class="card-header">
+        <span class="card-title">Proximos Cursos</span>
+        <button type="button" class="btn btn-primary btn-sm" data-action="new-course">Novo Curso</button>
+      </div>
+      <div class="card-body">
+        ${renderNextCoursesList(user.id)}
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 2rem;">
+      <div class="card-header">
         <span class="card-title">Cursos Recentes</span>
         <div class="card-header-actions">
           ${renderCompletedCoursesToggle(hiddenCompletedCount)}
@@ -504,7 +579,10 @@ function renderCourseCards(courses) {
       <div class="course-card ${complete ? 'course-card-completed' : ''}" data-action="open-course" data-course-id="${course.id}">
         <div class="course-card-header">
           <span class="course-name">${escapeHtml(course.name)}</span>
-          ${course.platform ? `<span class="course-platform">${escapeHtml(course.platform)}</span>` : ''}
+          <div class="course-card-badges">
+            ${course.category ? renderCategoryBadge(course.category) : ''}
+            ${course.platform ? `<span class="course-platform">${escapeHtml(course.platform)}</span>` : ''}
+          </div>
         </div>
         ${course.description ? `<p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 0.75rem;">${escapeHtml(course.description)}</p>` : ''}
         ${course.deadline || course.workloadHours ? `
@@ -546,7 +624,10 @@ function renderCourseDetail() {
     </button>
 
     <div class="course-detail-header">
-      <h2>${escapeHtml(course.name)}</h2>
+      <div class="course-detail-title-row">
+        <h2>${escapeHtml(course.name)}</h2>
+        ${course.category ? renderCategoryBadge(course.category) : ''}
+      </div>
       ${course.description ? `<p class="course-description">${escapeHtml(course.description)}</p>` : ''}
       ${course.deadline || course.workloadHours || course.platform ? `
       <div class="deadline-info ${deadline.expired ? 'expired' : ''}">
@@ -947,11 +1028,19 @@ function resolveConfirm(confirmed) {
 }
 
 function courseForm(course = null) {
+  const inQueue = course ? course.queueOrder != null : true;
+
   return `
     <form id="modal-form">
       <div class="form-group">
         <label>Nome do Curso <span class="required">*</span></label>
         <input type="text" class="form-input" name="name" required value="${course ? escapeHtml(course.name) : ''}" placeholder="Ex: JavaScript Completo">
+      </div>
+      <div class="form-group">
+        <label>Categoria</label>
+        <select class="form-input" name="category">
+          ${renderCategoryOptions(course?.category || '')}
+        </select>
       </div>
       <div class="form-group">
         <label>Descricao</label>
@@ -972,6 +1061,13 @@ function courseForm(course = null) {
         <label>Encerramento do acesso à plataforma</label>
         <input type="date" class="form-input" name="deadline" value="${course?.deadline || ''}">
         <p class="form-hint">Data em que o acesso ao curso na plataforma expira (nao e a meta de conclusao).</p>
+      </div>
+      <div class="form-group">
+        <label class="finance-checkbox-label">
+          <input type="checkbox" name="inQueue" ${inQueue ? 'checked' : ''}>
+          Incluir nos proximos cursos
+        </label>
+        <p class="form-hint">Novos cursos entram automaticamente na fila com ordem definida por voce.</p>
       </div>
     </form>
   `;
@@ -1363,15 +1459,27 @@ async function handleSaveCourse(courseId = null) {
   if (!form.reportValidity()) return;
 
   const formData = new FormData(form);
+  const inQueue = form.querySelector('[name="inQueue"]').checked;
+  const category = formData.get('category')?.toString().trim() || null;
+
   const courseData = {
     name: formData.get('name').trim(),
     description: formData.get('description').trim() || null,
     platform: formData.get('platform').trim() || null,
     workloadHours: formData.get('workloadHours') ? parseFloat(formData.get('workloadHours')) : null,
-    deadline: formData.get('deadline')?.toString().trim() || null
+    deadline: formData.get('deadline')?.toString().trim() || null,
+    category,
+    inQueue
   };
 
   if (courseId) {
+    const existing = getCourseById(data, courseId);
+    if (inQueue && existing?.queueOrder == null) {
+      courseData.queueOrder = getNextQueueOrder(data, data.currentUserId);
+    } else if (!inQueue) {
+      courseData.queueOrder = null;
+    }
+    delete courseData.inQueue;
     await updateCourse(data, courseId, courseData);
     showToast('Curso atualizado com sucesso');
   } else {
@@ -1605,6 +1713,28 @@ async function handleContentClick(e) {
       showCompletedCourses = !showCompletedCourses;
       localStorage.setItem('studyflow-show-completed', showCompletedCourses ? 'true' : 'false');
       render();
+      break;
+    case 'queue-move-up':
+      await runAction(async () => {
+        if (await reorderCourseQueue(data, target.dataset.courseId, 'up')) {
+          await refresh();
+        }
+      });
+      break;
+    case 'queue-move-down':
+      await runAction(async () => {
+        if (await reorderCourseQueue(data, target.dataset.courseId, 'down')) {
+          await refresh();
+        }
+      });
+      break;
+    case 'queue-remove':
+      await runAction(async () => {
+        if (await removeCourseFromQueue(data, target.dataset.courseId)) {
+          showToast('Curso removido da fila');
+          await refresh();
+        }
+      });
       break;
     case 'show-ranking-user':
       openRankingUserCoursesModal(target.dataset.userId);

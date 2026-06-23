@@ -2,6 +2,34 @@
  * Funcoes utilitarias de calculo e formatacao.
  */
 
+export const COURSE_CATEGORIES = [
+  'Tecnologia',
+  'Design',
+  'Idiomas',
+  'Negócios',
+  'Desenvolvimento Pessoal',
+  'Ferramentas e Certificações'
+];
+
+const CATEGORY_SLUGS = {
+  'Tecnologia': 'tech',
+  'Design': 'design',
+  'Idiomas': 'languages',
+  'Negócios': 'business',
+  'Desenvolvimento Pessoal': 'personal',
+  'Ferramentas e Certificações': 'tools'
+};
+
+export function getCategorySlug(category) {
+  return CATEGORY_SLUGS[category] || 'default';
+}
+
+export function renderCategoryBadge(category) {
+  if (!category) return '';
+  const slug = getCategorySlug(category);
+  return `<span class="badge badge-category badge-category-${slug}">${escapeHtml(category)}</span>`;
+}
+
 export function formatDate(dateStr) {
   if (!dateStr) return '-';
   const date = new Date(dateStr + 'T00:00:00');

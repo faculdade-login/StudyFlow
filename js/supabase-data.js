@@ -25,6 +25,8 @@ function mapCourse(row) {
     platform: row.platform,
     deadline: row.deadline,
     workloadHours: row.workload_hours != null ? Number(row.workload_hours) : null,
+    category: row.category ?? null,
+    queueOrder: row.queue_order ?? null,
     createdAt: row.created_at
   };
 }
@@ -245,7 +247,9 @@ export async function insertCourse(userId, course) {
       description: course.description,
       platform: course.platform,
       deadline: course.deadline || null,
-      workload_hours: course.workloadHours
+      workload_hours: course.workloadHours,
+      category: course.category || null,
+      queue_order: course.queueOrder ?? null
     })
     .select()
     .single();
@@ -261,6 +265,8 @@ export async function updateCourseRow(courseId, updates) {
   if (updates.platform !== undefined) payload.platform = updates.platform;
   if (updates.deadline !== undefined) payload.deadline = updates.deadline || null;
   if (updates.workloadHours !== undefined) payload.workload_hours = updates.workloadHours;
+  if (updates.category !== undefined) payload.category = updates.category || null;
+  if (updates.queueOrder !== undefined) payload.queue_order = updates.queueOrder;
 
   const { error } = await supabase.from('courses').update(payload).eq('id', courseId);
   if (error) throw error;

@@ -23,8 +23,23 @@ create table if not exists public.courses (
   platform text,
   deadline date,
   workload_hours numeric(10, 1),
+  category text check (
+    category is null or category in (
+      'Tecnologia',
+      'Design',
+      'Idiomas',
+      'Negócios',
+      'Desenvolvimento Pessoal',
+      'Ferramentas e Certificações'
+    )
+  ),
+  queue_order integer,
   created_at timestamptz not null default now()
 );
+
+create index if not exists courses_user_queue_idx
+  on public.courses (user_id, queue_order)
+  where queue_order is not null;
 
 -- Modulos
 create table if not exists public.modules (

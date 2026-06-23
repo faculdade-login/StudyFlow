@@ -33,6 +33,8 @@ import {
   registerSyncLifecycle
 } from './supabase-sync.js';
 
+import { isCourseComplete } from './utils.js';
+
 export { flushProfileStatsSync as flushPendingSync, registerSyncLifecycle };
 
 let cachedData = defaultData();
@@ -326,11 +328,101 @@ function pushUserStats(data, userId, options = {}) {
   }
 }
 
+export function getNextQueueOrder(data, userId) {
+  const orders = getCoursesByUser(data, userId)
+    .map(c => c.queueOrder)
+    .filter(order => order != null);
+
+  return orders.length ? Math.max(...orders) + 1 : 1;
+}
+
+export function getQueuedCourses(data, userId) {
+  return getCoursesByUser(data, userId)
+    .filter(course => {
+      if (course.queueOrder == null) return false;
+      const modules = getModulesByCourse(data, course.id);
+      const lessons = getLessonsByCourse(data, course.id);
+      if (modules.length === 0 || lessons.length === 0) return true;
+      return !isCourseComplete(lessons, modules);
+    })
+    .sort((a, b) => a.queueOrder - b.queueOrder);
+}
+
+async function maybeClearQueueIfComplete(data, lessonId) {
+  const lesson = getLessonById(data, lessonId);
+  if (!lesson) return;
+  await maybeClearQueueForModule(data, lesson.moduleId);
+}
+
+async function maybeClearQueueForModule(data, moduleId) {
+  const module = getModuleById(data, moduleId);
+  if (!module) return;
+
+  const courseId = module.courseId;
+  const course = getCourseById(data, courseId);
+  if (!course || course.queueOrder == null) return;
+
+  const modules = getModulesByCourse(data, courseId);
+  const lessons = getLessonsByCourse(data, courseId);
+  if (modules.length === 0 || lessons.length === 0) return;
+  if (!isCourseComplete(lessons, modules)) return;
+
+  await updateCourseRow(courseId, { queueOrder: null });
+  const index = data.courses.findIndex(c => c.id === courseId);
+  if (index !== -1) data.courses[index].queueOrder = null;
+}
+
 export async function addCourse(data, course) {
-  const created = await insertCourse(data.currentUserId, course);
+  const payload = { ...course };
+
+  if (payload.inQueue !== false && payload.queueOrder == null) {
+    payload.queueOrder = getNextQueueOrder(data, data.currentUserId);
+  }
+
+  if (payload.inQueue === false) {
+    payload.queueOrder = null;
+  }
+
+  delete payload.inQueue;
+
+  const created = await insertCourse(data.currentUserId, payload);
   data.courses.push(created);
   pushUserStats(data, data.currentUserId);
   return created;
+}
+
+export async function reorderCourseQueue(data, courseId, direction) {
+  const queued = getQueuedCourses(data, data.currentUserId);
+  const index = queued.findIndex(course => course.id === courseId);
+  if (index === -1) return false;
+
+  const swapIndex = direction === 'up' ? index - 1 : index + 1;
+  if (swapIndex < 0 || swapIndex >= queued.length) return false;
+
+  const current = queued[index];
+  const other = queued[swapIndex];
+  const currentOrder = current.queueOrder;
+  const otherOrder = other.queueOrder;
+
+  await updateCourseRow(current.id, { queueOrder: otherOrder });
+  await updateCourseRow(other.id, { queueOrder: currentOrder });
+
+  const currentIndex = data.courses.findIndex(c => c.id === current.id);
+  const otherIndex = data.courses.findIndex(c => c.id === other.id);
+  if (currentIndex !== -1) data.courses[currentIndex].queueOrder = otherOrder;
+  if (otherIndex !== -1) data.courses[otherIndex].queueOrder = currentOrder;
+
+  return true;
+}
+
+export async function removeCourseFromQueue(data, courseId) {
+  const course = getCourseById(data, courseId);
+  if (!course || course.queueOrder == null) return false;
+
+  await updateCourseRow(courseId, { queueOrder: null });
+  const index = data.courses.findIndex(c => c.id === courseId);
+  if (index !== -1) data.courses[index].queueOrder = null;
+  return true;
 }
 
 export async function updateCourse(data, courseId, updates) {
@@ -400,13 +492,17 @@ export async function updateLesson(data, lessonId, updates) {
   await updateLessonRow(lessonId, updates);
   data.lessons[index] = { ...data.lessons[index], ...updates };
   pushUserStats(data, data.currentUserId);
+  await maybeClearQueueIfComplete(data, lessonId);
   return data.lessons[index];
 }
 
 export async function deleteLesson(data, lessonId) {
+  const lesson = getLessonById(data, lessonId);
+  const moduleId = lesson?.moduleId;
   await deleteLessonRow(lessonId);
   data.lessons = data.lessons.filter(l => l.id !== lessonId);
   pushUserStats(data, data.currentUserId);
+  if (moduleId) await maybeClearQueueForModule(data, moduleId);
 }
 
 export async function addActivity(data, activity) {
